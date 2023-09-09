@@ -1,35 +1,41 @@
 ## AUTOMATED SPP THRESHOLD DETERMINATION
 # by C.E.Moore V.
 # 
-# OBJ: Find individual species' threshold based on [criteria] 
-# >> determine proportion of species in assemblage with a threshold
+# OBJ: Find individual species' threshold based on change in cumulative importance 
 
 library(tidyverse); library(gradientForest)
 library(ggpubr)
 
-# set variables + load ----
+# set variables----
 PATH <- getwd()
+
+#what is the location/file name of the GF model of interest?
+file.name <- paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_full_cat.rds") 
+#how many variables (ordered by importance) to threshold?
+num.vars <- 5
+#what is the allowable slope cut off for consolidating thresholds - ie, percent of targeted slope?
+prx.val <- 0.60 #<< could be part of the threshold if its at least 60% of the highest slope value
+#what is the allowable slope cut off for alternative thresholds besides highest slope?
+sl2.val <- 0.80 #<< other peaks are highlighted if slope is greater then at least 80% of highest slope value
+
+# load necessary files ----
+#script contains functions used in this script:
 source(paste0(PATH, "/Scripts/01a_FindThreshFunc.R"))
 
-num.vars <- 5 #how many variables to pull out
-
-file.name <- paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_full_cat.rds") #save name separate for later
-
-gf.mod <- readRDS(file.name)
-
+gf.mod <- readRDS(file.name) #gf model of interest
 spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species") #pull out species performance
 colnames(spp_imp)[2] <- "rel_err"
-
 full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
 
-iVars <- names(importance(gf.mod))[1:num.vars]
+iVars <- names(importance(gf.mod))[1:num.vars] #pull out variables of interest
 
 
 # find thresholds, all spp x imp. vars. ----
-sub_val <- 5 #set how far out to crop for second threshold method
 CU <- list()
+# i <- 1; x <- 49 #code testing ONLY!
 
 for (i in 1:length(iVars)) { #for every important variable ...
+  
   CU[[i]] <- cumimp(gf.mod, iVars[[i]], "Species") #get cumulative importance for all species
   
   CU[[i]] <- lapply(seq_along(CU[[i]]), function(x) { #get various threshold values for all species
@@ -40,61 +46,88 @@ for (i in 1:length(iVars)) { #for every important variable ...
     spp.cu <- spp.cu %>%
       mutate(species = names(CU[[i]])[[x]], #get species name for later
              env_var = iVars[[i]], #get variable name for later
-             slope = (Y - lag(Y)) / (X - lag(X))) #get slope of cumulative importance curve
+             slope = (Y - lead(Y)) / (X - lead(X))) #get slope of cumulative importance curve
     
-    if (sum(spp.cu$slope, na.rm = T) == 0) { #deal with spp, def. no threshold
+    if (sum(spp.cu$slope, na.rm = T) == 0) { #deal with spp with flat cumulative importance curve
       spp.cu <- spp.cu %>%
-        mutate(t_max_start = NA, t_max_end = NA, t_5p = NA, t_m2_end = NA, t_m2_start = NA, t_m2_5p = NA)
+        mutate(t_max_start = NA, t_max_end = NA, t_max_mn = NA, n_peaks = 0, t_m2_start = NA, t_m2_end = NA, t_m2_mn = NA)
       return(spp.cu)
     }
     
-    #threshold = largest change in cumulative importance, start and end of the change
+    #find slopes that are close together to consolidate
     idx <- which.max(spp.cu$slope) #index of largest slope
+    n <- (max(spp.cu$X, na.rm = T) - min(spp.cu$X, na.rm = T)) * 0.05 #10% window (of total env gradient)
     
-    spp.cu$t_max_start <- spp.cu[idx-1,]$X
-    spp.cu$t_max_end <- spp.cu[idx,]$X
+    tmp <- spp.cu %>%
+      filter((spp.cu[idx,]$X - n) < X & X < (spp.cu[idx,]$X + n))
     
-    #threshold = find point a bit before largest change, to account for slight increases before the jump
-    if (sub_val < idx) { 
-      tmp <- spp.cu %>% rownames_to_column("index") %>% slice((idx-sub_val):(idx+sub_val)) 
+    tmp.t <- max(tmp$slope, na.rm = T) * prx.val
+    
+    #get index of start and end of change
+    t.idx <- which(spp.cu$X %in% (tmp %>% filter(slope > tmp.t & slope != max(slope, na.rm = T)))$X)
+    t.idx <- c(t.idx, idx) #combine all potential start / end points
+    t.idx <- c(start = min(t.idx, na.rm = T), end = max(t.idx, na.rm = T)+1)
+    
+    #add to df
+    spp.cu$t_max_start <- spp.cu[t.idx[["start"]],]$X
+    spp.cu$t_max_end <- spp.cu[t.idx[["end"]],]$X
+    spp.cu$t_max_mn <- ( unique(spp.cu$t_max_start) + unique(spp.cu$t_max_end) ) / 2
+    
+    #get total cumulative importance change and threshold proportion to total
+    d <- max(spp.cu$Y, na.rm = T) - min(spp.cu$Y, na.rm = T)
+    
+    spp.cu$t_max_prop <- ( 
+      spp.cu[which(spp.cu$X == unique(spp.cu$t_max_end)),]$Y - spp.cu[which(spp.cu$X == unique(spp.cu$t_max_start)),]$Y
+    ) / d * 100
+    
+    #find other potential thresholds throughout rest of curve
+    tmp <- spp.cu
+    tmp[t.idx[["start"]]:t.idx[["end"]], ] <- NA
+    
+    tmp.t <- max(spp.cu$slope, na.rm = T) * sl2.val #find other peaks
+    spp.cu <- spp.cu %>% mutate(n_peaks = sum(tmp$slope > tmp.t, na.rm = T)+1) #count other alternatives
+    
+    if (unique(spp.cu$n_peaks) > 1) { #if more than 1 threshold is found...
+      
+      #threshold second time
+      idx <- which.max(tmp$slope) #index of largest slope
+      
+      tmp2 <- tmp %>%
+        filter((tmp[idx,]$X - n) < X & X < (tmp[idx,]$X + n))
+      
+      tmp.t <- max(tmp2$slope, na.rm = T) * prx.val
+      
+      t.idx <- which(tmp$X %in% (tmp2 %>% filter(slope > tmp.t & slope != max(slope, na.rm = T)))$X)
+      t.idx <- c(t.idx, idx) #combine all potential start / end points
+      t.idx <- c(start = min(t.idx, na.rm = T), end = max(t.idx, na.rm = T)+1)
+      
+      #add to df
+      spp.cu$t_m2_end <- tmp[t.idx[["start"]],]$X
+      spp.cu$t_m2_start <- tmp[t.idx[["end"]],]$X
+      spp.cu$t_m2_mn <- ( unique(spp.cu$t_m2_start) + unique(spp.cu$t_m2_end) ) / 2
+      
+      #get total cumulative importance change and threshold proportion to total
+      spp.cu$t_m2_prop <- ( spp.cu[t.idx[["end"]],]$Y - spp.cu[t.idx[["start"]],]$Y ) / d * 100
+      
     } else {
-      tmp <- spp.cu %>% rownames_to_column("index") %>% slice(0:(idx+sub_val)) }
-    
-    tmp <- tmp %>%
-      mutate(norm_y = (Y - min(Y)) / (max(Y) - min(Y)),
-             find_peak = abs(norm_y - 0.05))
-    idx <- tmp[which.min(tmp$find_peak),]$index
-    
-    spp.cu$t_5p <- spp.cu[idx,]$X
-    
-    #other potential thresholds that are close in magnitude to largest change?
-    tmp.t <- max(spp.cu$slope, na.rm = T) * 0.9 #within 90% of largest value
-    spp.cu <- spp.cu %>%
-      mutate(n_peaks = sum(spp.cu$slope > tmp.t, na.rm = T))
-    
-    if (unique(spp.cu$n_peaks) > 1) {
-      spp.cu$t_m2_end <- (spp.cu %>% filter(slope > tmp.t & slope != max(slope, na.rm = T)) %>% arrange(desc(slope)))[1,]$X
-      
-      idx <- which(spp.cu$t_m2_end == spp.cu$X)
-      spp.cu$t_m2_start <- spp.cu[(idx-1),]$X
-      
-      if (sub_val < idx) { 
-        tmp <- spp.cu %>% rownames_to_column("index") %>% slice((idx-sub_val):(idx+sub_val)) 
-      } else {
-        tmp <- spp.cu %>% rownames_to_column("index") %>% slice(0:(idx+sub_val)) }
-      
-      tmp <- tmp %>%
-        mutate(norm_y = (Y - min(Y)) / (max(Y) - min(Y)),
-               find_peak = abs(norm_y - 0.05))
-      idx <- tmp[which.min(tmp$find_peak),]$index
-      
-      spp.cu$t_m2_5p <- spp.cu[idx,]$X
-      
-    } else {
-      spp.cu$t_m2_end <- NA
-      spp.cu$t_m2_start <- NA
-      spp.cu$t_m2_5p <- NA
+      spp.cu$t_m2_end <- NA; spp.cu$t_m2_start <- NA; spp.cu$t_m2_mn <- NA; spp.cu$t_m2_prop <- NA
     }
+
+    # #threshold = find point a bit before largest change, to account for slight increases before the jump
+    # sub_val <- 5 #set how far out to crop for second threshold method
+    # if (sub_val < idx) { 
+    #   tmp <- spp.cu %>% rownames_to_column("index") %>% slice((idx-sub_val):(idx+sub_val)) 
+    # } else {
+    #   tmp <- spp.cu %>% rownames_to_column("index") %>% slice(0:(idx+sub_val)) }
+    # 
+    # tmp <- tmp %>%
+    #   mutate(norm_y = (Y - min(Y)) / (max(Y) - min(Y)),
+    #          find_peak = abs(norm_y - 0.05))
+    # idx <- tmp[which.min(tmp$find_peak),]$index
+    # 
+    # spp.cu$t_5p <- spp.cu[idx,]$X
+    # 
+    # spp.cu$t_5p_prop <- ( spp.cu[spp.cu$X == unique(spp.cu$t_max_end), ]$Y - spp.cu[idx,]$Y ) / d * 100
     
     return(spp.cu)
     })
@@ -104,18 +137,19 @@ for (i in 1:length(iVars)) { #for every important variable ...
   CU[[i]] <- CU[[i]] %>%
     left_join(., spp_imp, by = "species") #add error just in case it's useful later
   
-  cat(paste0(iVars[[i]], " thresholded..\n"))
+  cat(paste0(iVars[[i]], " thresholds calculated..\n"))
   if(i == length(iVars)) cat("\nDone!")
 }
 
 # quick check threshold creation // see below for nicer plotting
 # plot(spp.cu$X, spp.cu$Y, type = "l")
+# points(tmp$X, tmp$Y, col = "blue", lwd = 2)
 # abline(v = unique(spp.cu$t_max_start), col = "red")
 # abline(v = unique(spp.cu$t_max_end), col = "blue")
-# abline(v = unique(spp.cu$t_5p), col = "green")
+# abline(v = unique(spp.cu$t_max_mn), col = "green")
 # abline(v = unique(spp.cu$t_m2_end), col = "purple")
 # abline(v = unique(spp.cu$t_m2_start), col = "orange")
-# abline(v = unique(spp.cu$t_m2_5p), col = "pink")
+# abline(v = unique(spp.cu$t_m2_mn), col = "pink")
 # dev.off()
 
 CU_all <- bind_rows(CU)
@@ -124,79 +158,14 @@ write_csv(CU_all, paste0(PATH, "/11_Thresholds/full_thresh_",
                          gsub(".rds", "", gsub(paste0(PATH, "/10_GFOutput/"), "", file.name)), #matching name to GF model names
                          ".csv"))
 
-# proportion of spp with threshold ----
-## Method 1. Spp above ratio dens split importance:dens obs ----
-get_dens_ratio(gf.mod, "TminCat")
-
 # indiv. species plots to check things ----
-check_threshold <- function(spp_name, pred_var) { #make function to make it easier
-  
-  if(nrow(CU_all %>% filter(species == spp_name)) == 0) { stop(paste("Species name not found.")) }
-  if(nrow(CU_all %>% filter(env_var == pred_var)) == 0) { stop(paste("Variable name not found.")) }
-  spp.cu <- CU_all %>% filter(species == spp_name & env_var == pred_var)
-  
-  #get thresholds
-  t.x <- spp.cu %>% select(contains("t_")) %>% distinct() %>% select(!where(is.na)) %>%
-    pivot_longer(everything(), values_to = "thresh", names_to = "type")
-  
-  #get raw values
-  t.spp <- full.in %>% 
-    select(one_of(spp_name, pred_var), site_x, site_y)
-  
-  #plot theme for consistency
-  thresh_theme <- list(
-    theme_linedraw(),
-    scale_x_continuous(name = pred_var, 
-                       limits = c(floor(min(t.spp[, pred_var], na.rm = T)), ceiling(max(t.spp[, pred_var], na.rm = T))),
-                       n.breaks = abs( ceiling(max(t.spp[, pred_var], na.rm = T)) - floor(min(t.spp[, pred_var], na.rm = T)) + 1 )
-    )
-  )
-  
-  #boxplot for presence/absence distro around threshold
-  p_box <- ggplot() +
-    geom_boxplot(data = t.spp, aes(.data[[pred_var]], .data[[spp_name]])) +
-    geom_jitter(data = t.spp, aes(.data[[pred_var]], .data[[spp_name]]), width = 0.2) +
-    geom_vline(data = t.x, aes(xintercept = thresh, color = type), linewidth = 2, alpha = 0.6) +
-    ylab("presence / absence") +
-    thresh_theme
-  # p_box
-  
-  #cumulative importance plot
-  p_cimp <- ggplot() +
-    geom_path(data = spp.cu, aes(X, Y)) +
-    geom_vline(data = t.x, aes(xintercept = thresh, color = type), linewidth = 2, alpha = 0.6) +
-    xlab(pred_var) + ylab("cumulative importance") +
-    thresh_theme
-  # p_cimp
-  
-  #slope plot
-  p_slope <- ggplot() +
-    geom_path(data = spp.cu , aes(X, slope)) +
-    geom_vline(data = t.x, aes(xintercept = thresh, color = type), linewidth = 2, alpha = 0.6) +
-    xlab(pred_var) + ylab("cumulative importance slope") +
-    thresh_theme
-  # p_slope
-  
-  #stack
-  p <- ggpubr::ggarrange(p_cimp, p_slope, p_box, ncol = 1, nrow = 3, common.legend = T, legend = "right", align = "v")
-  p_all <- ggpubr::annotate_figure(p, top = text_grob(spp_name, face = "bold"))
-  # p_all
-  
-  return(p_all)
-}
+# check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Etheostoma.radiosum", pred_var = "WsAreaSqKm")
 
-check_threshold(spp_name = "Maccaffertium", pred_var = "TminCat")
-
-# #map it ----
-# library(maps); library(sf)
-# 
-# ozark <- st_as_sf(map(database = "state", region = c('missouri', 'arkansas', 'oklahoma'), plot = FALSE, fill = TRUE))
-# occ.dat <- t.spp %>% st_as_sf(., coords = c("site_x", "site_y"), crs = st_crs(4326), remove = F)
-# 
-# ggplot() +
-#   geom_sf(data = ozark) +
-#   geom_sf(data = occ.dat, aes(fill = .data[[spp]]), shape = 21) +
-#   # geom_vline(xintercept = t.x, color = "red") +
-#   theme_minimal()
-
-
+#save top spp plots
+top_spp <- as.list((spp_imp %>% arrange(desc(rel_err)))[1:5, "species"])
+lapply(top_spp, function(x) {
+  for (var in iVars) {
+    check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = x, pred_var = var, plot_it = F,
+                    save_location = paste0(PATH, "/11_Thresholds/Plots"))
+  }
+})

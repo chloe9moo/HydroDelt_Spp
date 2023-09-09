@@ -1,7 +1,14 @@
 # functions for 01_FindSppThreshold.R
+##contains:
+##1. function to calculate ratio of density splits / density observations
+##2. function to output stacked ggplots for looking at different types of thresholds against cum. imp. curves, and presence / absence data (requires ggpubr!)
+if(!"ggpubr" %in% (.packages())) { cat("warning: package 'ggpubr' is required to run 'check_threshold' plotting function and is not loaded.\n") }
+if(!"gradientForest" %in% (.packages())) { cat("warning: package 'gradientForest' is required to run these functions and is not loaded.\n") }
+if(!"tidyverse" %in% (.packages())) { cat("warning: package 'tidyverse' is required to run these functions and is not loaded.\n") }
 
+#this is modified from gradientForest::split.density.plot.method2 script!
 get_dens_ratio <- function(gf_model, pred_var) { 
-  #this is modified from gradientForest::split.density.plot.method2 script!
+
   #pull out necessary values
   i <- pred_var
   imp <- importance(gf_model)[i]
@@ -92,3 +99,83 @@ get_dens_ratio <- function(gf_model, pred_var) {
 # lines(dObsNorm, col = "red", lwd = 2)
 # lines(dStdNorm, col = "blue", lwd = 2)
 # abline(h = mean(dStdNorm$y)/mean(dStd$y), lty = 2, col = "blue")
+
+check_threshold <- function(thresh_df, pa_df, spp_name, pred_var, plot_it = TRUE, save_location = FALSE) { #make function to make it easier
+  
+  if(nrow(thresh_df %>% filter(species == spp_name)) == 0) { stop(paste("Species name not found.")) }
+  if(nrow(thresh_df %>% filter(env_var == pred_var)) == 0) { stop(paste("Variable name not found.")) }
+  spp.cu <- thresh_df %>% filter(species == spp_name & env_var == pred_var)
+  
+  #get thresholds
+  if( sum(spp.cu$slope, na.rm = T) != 0 ) {
+    t.x <- spp.cu %>% select(contains("t_")) %>% select(-contains("_prop")) %>% distinct() %>% select(!where(is.na)) %>%
+      pivot_longer(everything(), values_to = "thresh", names_to = "type")
+  }
+
+  #get raw values
+  t.spp <- pa_df %>% 
+    select(one_of(spp_name, pred_var), site_x, site_y)
+  
+  #plot theme for consistency
+  thresh_theme <- list(
+    {if(exists("t.x")) geom_vline(data = t.x, aes(xintercept = thresh, color = type), linewidth = 1.5, alpha = 0.5)},
+    theme_linedraw(),
+    scale_x_continuous(name = pred_var,
+                       limits = c(floor(min(t.spp[, pred_var], na.rm = T)), ceiling(max(t.spp[, pred_var], na.rm = T))),
+                       n.breaks = abs( ceiling(max(t.spp[, pred_var], na.rm = T)) - floor(min(t.spp[, pred_var], na.rm = T)) + 1 )
+    ),
+    theme(axis.title = element_text(size = 9), legend.title = element_text(size = 9)),
+    labs(color = "Threshold Type:")
+  )
+  
+  #boxplot for presence/absence distro around threshold
+  p_box <- ggplot() +
+    geom_boxplot(data = t.spp, aes(.data[[pred_var]], .data[[spp_name]]), outlier.shape = NA) +
+    geom_jitter(data = t.spp, aes(.data[[pred_var]], .data[[spp_name]]), width = 0, height = 0.3, size = 1, alpha = 0.5) +
+    ylab("pres. / abs.") +
+    thresh_theme
+  # p_box
+  
+  #cumulative importance plot
+  p_cimp <- ggplot() +
+    geom_path(data = spp.cu, aes(X, Y)) +
+    xlab(pred_var) + ylab("cumul. imp.") +
+    thresh_theme
+  # p_cimp
+  
+  #slope plot
+  p_slope <- ggplot() +
+    geom_path(data = spp.cu , aes(X, slope)) +
+    xlab(pred_var) + ylab("cumul. imp. slope") +
+    thresh_theme
+  # p_slope
+  
+  #stack
+  p <- ggpubr::ggarrange(p_cimp, p_slope, p_box, ncol = 1, nrow = 3, common.legend = T, legend = "bottom", align = "v")
+  p_all <- ggpubr::annotate_figure(p, top = text_grob(spp_name, face = "bold"))
+  # p_all
+  
+  if(save_location != FALSE) {
+    # ggsave(paste0(save_location, "/ThreshPlot_", spp_name, ".png"), plot = p_all)
+    png(filename = paste0(save_location, "/ThreshPlot_", spp_name, "_", pred_var, ".png"), width = 5, height = 6, units = "in", res = 200)
+    print(p_all)
+    dev.off()
+  }
+  
+  if(plot_it) { return(p_all) }
+}
+
+# check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Sialis", pred_var = "site_x",
+#                 save_location = paste0(PATH, "/11_Thresholds/Plots"))
+
+# #map it ----
+# library(maps); library(sf)
+# 
+# ozark <- st_as_sf(map(database = "state", region = c('missouri', 'arkansas', 'oklahoma'), plot = FALSE, fill = TRUE))
+# occ.dat <- t.spp %>% st_as_sf(., coords = c("site_x", "site_y"), crs = st_crs(4326), remove = F)
+# 
+# ggplot() +
+#   geom_sf(data = ozark) +
+#   geom_sf(data = occ.dat, aes(fill = .data[[spp]]), shape = 21) +
+#   # geom_vline(xintercept = t.x, color = "red") +
+#   theme_minimal()
