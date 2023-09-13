@@ -4,13 +4,14 @@
 # OBJ: Find individual species' threshold based on change in cumulative importance 
 
 library(tidyverse); library(gradientForest)
-library(ggpubr)
+# library(parallel) #<<multimodel runs
 
 # set variables----
 PATH <- getwd()
 
-#what is the location/file name of the GF model of interest?
-file.name <- paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_full_cat.rds") 
+#which model(s) to analyze? (what is the name of the file)
+file.name <- paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_full_cat.rds")  #single model run
+# file.list <- list.files(paste0(PATH, "/10_GFOutput"), pattern = "gf.", full.names = T)
 #how many variables (ordered by importance) to threshold?
 num.vars <- 5
 #what is the allowable slope cut off for consolidating thresholds - ie, percent of targeted slope?
@@ -18,21 +19,21 @@ prx.val <- 0.60 #<< could be part of the threshold if its at least 60% of the hi
 #what is the allowable slope cut off for alternative thresholds besides highest slope?
 sl2.val <- 0.80 #<< other peaks are highlighted if slope is greater then at least 80% of highest slope value
 
-# load necessary files ----
-#script contains functions used in this script:
-source(paste0(PATH, "/Scripts/01a_FindThreshFunc.R"))
-
+# load necessary files // start multi model run ----
+# n.cores <- detectCores()/2
+# mclapply(file.list, mc.cores = n.cores, function(file.name) { #start parallel run, ~3 min for 18 models on 8 cores, max ~14 GB RAM
+  
 gf.mod <- readRDS(file.name) #gf model of interest
+
 spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species") #pull out species performance
 colnames(spp_imp)[2] <- "rel_err"
-full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
 
 iVars <- names(importance(gf.mod))[1:num.vars] #pull out variables of interest
 
 
 # find thresholds, all spp x imp. vars. ----
 CU <- list()
-# i <- 1; x <- 49 #code testing ONLY!
+# i <- 4; x <- 104 #code testing ONLY!
 
 for (i in 1:length(iVars)) { #for every important variable ...
   
@@ -158,14 +159,24 @@ write_csv(CU_all, paste0(PATH, "/11_Thresholds/full_thresh_",
                          gsub(".rds", "", gsub(paste0(PATH, "/10_GFOutput/"), "", file.name)), #matching name to GF model names
                          ".csv"))
 
+# }) #end parallel
+
 # indiv. species plots to check things ----
-# check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Etheostoma.radiosum", pred_var = "WsAreaSqKm")
+# library(ggpubr)
+# source(paste0(PATH, "/Scripts/01a_FindThreshFunc.R"))
+# ##need to adjust to plot larger env gradients (e.g., WS Area)
+# CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.bugs.23.GW_HIT_cat.csv"))
+# gf.mod <- readRDS(file.list[[2]])
+# full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
+# spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species")
+# 
+# check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Orthocladiinae", pred_var = "fh10")
 
 #save top spp plots
-top_spp <- as.list((spp_imp %>% arrange(desc(rel_err)))[1:5, "species"])
-lapply(top_spp, function(x) {
-  for (var in iVars) {
-    check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = x, pred_var = var, plot_it = F,
-                    save_location = paste0(PATH, "/11_Thresholds/Plots"))
-  }
-})
+# top_spp <- as.list((spp_imp %>% arrange(desc(rel_err)))[1:5, "species"]) 
+# lapply(top_spp, function(x) {
+#   for (var in iVars) {
+#     check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = x, pred_var = var, plot_it = F,
+#                     save_location = paste0(PATH, "/11_Thresholds/Plots"))
+#   }
+# })

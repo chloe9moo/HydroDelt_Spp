@@ -114,7 +114,7 @@ check_threshold <- function(thresh_df, pa_df, spp_name, pred_var, plot_it = TRUE
 
   #get raw values
   t.spp <- pa_df %>% 
-    select(one_of(spp_name, pred_var), site_x, site_y)
+    select(one_of(spp_name, pred_var))
   
   #plot theme for consistency
   thresh_theme <- list(
@@ -122,7 +122,7 @@ check_threshold <- function(thresh_df, pa_df, spp_name, pred_var, plot_it = TRUE
     theme_linedraw(),
     scale_x_continuous(name = pred_var,
                        limits = c(floor(min(t.spp[, pred_var], na.rm = T)), ceiling(max(t.spp[, pred_var], na.rm = T))),
-                       n.breaks = abs( ceiling(max(t.spp[, pred_var], na.rm = T)) - floor(min(t.spp[, pred_var], na.rm = T)) + 1 )
+                       # n.breaks = abs( ceiling(max(t.spp[, pred_var], na.rm = T)) - floor(min(t.spp[, pred_var], na.rm = T)) + 1 )
     ),
     theme(axis.title = element_text(size = 9), legend.title = element_text(size = 9)),
     labs(color = "Threshold Type:")
@@ -165,8 +165,12 @@ check_threshold <- function(thresh_df, pa_df, spp_name, pred_var, plot_it = TRUE
   if(plot_it) { return(p_all) }
 }
 
-# check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Sialis", pred_var = "site_x",
-#                 save_location = paste0(PATH, "/11_Thresholds/Plots"))
+# CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.bugs.23.GW_LULC_cat.csv"))
+# gf.mod <- readRDS(paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_LULC_cat.rds"))
+# full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
+# spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species")
+# 
+# check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Orthocladiinae", pred_var = "TminCat")
 
 # #map it ----
 # library(maps); library(sf)
