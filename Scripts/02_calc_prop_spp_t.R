@@ -7,7 +7,7 @@ library(tidyverse); library(gradientForest)
 # library(parallel)
 
 PATH <- getwd()
-# source(paste0(PATH, "/Scripts/01a_FindThreshFunc.R"))
+# source(paste0(PATH, "/Scripts/01a_find_thresh_func.R"))
 
 file.name <- "full_thresh_gf.bugs.23.GW_full_cat.csv" #<<which threshold file to analyze // single model runs
 # file.list <- list.files(paste0(PATH, "/11_Thresholds"), pattern = "full_thresh", full.names = F) #parallel / multi model runs
