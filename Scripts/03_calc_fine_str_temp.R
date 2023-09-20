@@ -13,9 +13,11 @@
 #6. Using the USGS National Climate Change Viewer to get historical and future air temperatures (not sure if this is necessary?)
 
 library(sf); library(tidyverse); library(maps)
-library(dataRetrieval)
+library(dataRetrieval); library(httr2)
 
 PATH <- getwd()
+
+source(paste0(PATH, "/Scripts/XX_api_token.R"))
 
 fish.dat <- read_csv(list.files(paste0(PATH, "/01_Data"), "Fishes", full.name=TRUE))
 bug.dat <- read_csv(list.files(paste0(PATH, "/01_Data"), "Insect", full.name=TRUE))
@@ -90,6 +92,8 @@ bind_rows(temp.dv, temp.qw, temp.uv) %>%
   write_csv(., paste0(PATH, "/01_Data/USGS_gauge_daily_wtemp.csv"))
 write_csv(temp, paste0(PATH, "/01_Data/USGS_gauge_monthly_wtemp.csv"))
 
+rm(temp.dv, temp.qw, temp.uv)
+
 #3. Exclude months with fewer than 20 days temp data ----
 temp <- temp %>% filter(ct >= 20) %>%
   mutate(date = with(., sprintf("%d-%02d", year, month)))
@@ -104,42 +108,117 @@ xy <- g.info %>%
   select(site_no, station_nm, dec_lat_va, dec_long_va) %>% 
   filter(site_no %in% temp$site_no) %>% 
   distinct()
+
+#NOAA location IDs:
+ids <- read_csv(paste0(PATH, "/01_Data/county_fips_master.csv")) %>%
+  mutate(fips = case_when(nchar(as.character(fips)) == 4 ~ paste0("0", as.character(fips)),
+                          T ~ as.character(fips))) %>%
+  filter(state_abbr %in% c("AR", "OK", "MO"))
+
 #find which counties the USGS stations are in:
 hlnd <- st_as_sf(maps::map("county", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>% #EPSG 4269 = NAD83
   st_transform(., crs = 4269)
-counties <- hlnd %>% 
-  st_join(., st_as_sf(xy, coords = c("dec_long_va", "dec_lat_va"), crs = 4269)) %>% #had to turn off spherical geometry to do this
+sf_use_s2(FALSE) #had to turn off spherical geometry to do this, shouldn't be an issue (??)
+usgs.noaa <- hlnd %>% 
+  st_join(., st_as_sf(xy, coords = c("dec_long_va", "dec_lat_va"), crs = 4269)) %>% 
   filter(!is.na(site_no))
-temp %>% 
-  left_join(., counties %>% st_drop_geometry()) %>%
-  group_by(site_no) %>%
-  reframe(start = min(date), end = max(date), county = ID, months = n()) %>%
-  distinct()
-#NOAA location IDs:
-ids <- read_csv(paste0(PATH, "/01_Data/county_fips_master.csv")) %>% 
-  mutate(fips = paste0("0", as.character(fips))) %>%
-  filter(state_abbr %in% c("AR", "OK", "MO"))
+counties <- temp %>%
+  left_join(., usgs.noaa %>% st_drop_geometry()) %>%
+  group_by(ID) %>%
+  reframe(start = min(date), end = max(date), months = n()) %>%
+  rename(county = ID) %>%
+  distinct() %>%
+  mutate(state_abbr = case_when(grepl("arkansas", county, fixed = TRUE) ~ "AR",
+                                grepl("missouri", county, fixed = TRUE) ~ "MO",
+                                grepl("oklahoma", county, fixed = TRUE) ~ "OK",
+                                T ~ NA),
+         county_name = sub("^.*?,", "", county),
+         county_name = paste(str_to_title(county_name), "County"),
+         county_name = case_when(grepl("Mc", county_name, fixed = TRUE) ~ gsub("(Mc)([a-z])", "\\1\\U\\2", county_name, perl = TRUE),
+                                 T ~ county_name)) %>%
+  left_join(., ids %>% select(county_name, state_abbr, fips), by = c("county_name", "state_abbr")) %>%
+  mutate(p_start = as.Date(paste0(start, "-01")),
+         p_end = ceiling_date(ymd(paste0(end, "-01")), 'month') - days(1),
+         n_days = difftime(p_end, p_start))
 
+#get daily temperature data for each county
+base_url <- "https://www.ncei.noaa.gov/cdo-web/api/v2/data"
+##get dates in chunks for each county in 12 month increments (seems to be limit?)
+d_df <- data.frame()
+for(j in 1:nrow(counties)) {
+  tmp <- counties[j, ]
+  df12 <- data.frame(fips = tmp$fips, 
+                     start = seq(tmp$p_start, tmp$p_end, by = "13 months"), 
+                     end = NA, 
+                     status = NA)
+  df12 <- df12 %>% 
+    mutate(end = lead(start) - days(1), 
+           end = case_when(is.na(end) ~ tmp$p_end,
+                           T ~ end))
+  d_df <- bind_rows(d_df, df12)
+}
 
-clim <- read_csv(list.files(paste0(PATH, "/01_Data/daily_climate/"), full.names = T)) %>%
-  filter(!is.na(TOBS)) %>%
-  mutate(year = year(DATE),
-         month = month(DATE)) %>%
-  group_by(year, month) %>%
-  summarise(mn_monthly_temp = mean(TOBS)) %>%
+a_temp <- data.frame()
+# d_df <- d_df %>% filter(fips %in% redo$fips)
+for (i in 1:nrow(d_df)) {
+  #make get url
+  url <- paste0(base_url,
+                "?datasetid=GHCND",
+                "&datatypeid=TMAX&datatypeid=TMIN",
+                "&locationid=FIPS:", d_df[i, "fips"],
+                "&startdate=", d_df[i, "start"],
+                "&enddate=", d_df[i, "end"],
+                "&units=metric",
+                "&limit=1000")
+  req <- request(url) %>%
+    req_headers(token = api_token) %>%
+    req_error(is_error = function(resp) FALSE) %>% #don't stop if it's a bad request
+    req_perform()
+  d_df[i, "status"] <- req$status_code #to check specific sections that go wrong
+  
+  if(req$status_code == 200) {
+    res <- resp_body_json(req, simplifyVector = TRUE)$results
+    res$fips <- d_df[i, "fips"]
+    a_temp <- bind_rows(a_temp, res)
+    cat(paste0(d_df[i, "fips"], ": ", d_df[i, "start"], " to ", d_df[i, "end"]), "complete..\n")
+  } else {
+    cat(paste0(d_df[i, "fips"], ": ",d_df[i, "start"], " to ", d_df[i, "end"]), "bad request..\n")
+  }
+  
+  if(i == nrow(d_df)) { cat("\nDone!\n") }
+}
+rm(req, tmp, df12)
+
+#check run
+# a_temp %>% filter(is.na(value))
+
+# write_csv(a_temp, paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
+# a_temp2 <- read_csv(paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
+# a_temp3 <- bind_rows(a_temp %>% mutate(date = as.Date(date)), a_temp2)
+# a_temp <- a_temp3 %>% filter(!is.na(value))
+write_csv(a_temp, paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
+
+#calc monthly means
+a_mn_temp <- a_temp %>%
+  mutate(year = year(date),
+         month = month(date)) %>%
+  select(-attributes) %>% 
+  pivot_wider(names_from = datatype, values_from = value) %>%
+  group_by(fips, year, month) %>%
+  summarise(mn_max_monthly_temp = mean(TMAX, na.rm = T),
+            mn_min_monthly_temp = mean(TMIN, na.rm = T)) %>%
+  rowwise() %>%
+  mutate(mn_monthly_temp = mean(c(mn_max_monthly_temp, mn_min_monthly_temp), na.rm = T)) %>%
   ungroup() %>%
-  mutate(date = as.Date(with(., sprintf("%d-%02d", year, month)))) %>%
-  arrange(date)
-#this data is from izard county as a test! also date is not recognized (can't plot) likely because it doesn't have a day
-#also, I think I need min temp and max temp, and then take a mean of them all (see paper)
+  mutate(date = with(., sprintf("%d-%02d", year, month)),
+         p_date = as.Date(paste0(date, "-01"))) %>%
+  arrange(fips, p_date)
+write_csv(a_mn_temp, paste0(PATH, "/01_Data/NOAA_monthly_atemp.csv"))
 
+a_mn_temp_id <- a_mn_temp %>%
+  left_join(., counties %>% select(fips, county)) %>%
+  left_join(., usgs.noaa %>% st_drop_geometry() %>% select(-station_nm), 
+            by = c("county" = "ID"), multiple = "all")
+write_csv(a_mn_temp_id, paste0(PATH, "/01_Data/NOAA_monthly_atemp_wIDS.csv"))
 
-
-
-ggplot() +
-  geom_sf(data = hlnd) +
-  geom_sf(data = counties, fill = "red") +
-  geom_sf(data = st_as_sf(xy, coords = c("dec_long_va", "dec_lat_va"), crs = 4269)) +
-  theme_minimal()
-
-
+#5. Calculate least-squares linear regression for each site to predict stream temperature from air temperature ----
