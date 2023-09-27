@@ -50,7 +50,7 @@ temp.dv <- temp.dv %>%
          day = day(Date),
          year = year(Date)) %>%
   group_by(site_no, year, month, day) %>%
-  summarise(mn_daily_temp = mean(X_00010_00003))
+  summarise(mn_daily_temp = mean(X_00010_00003, na.rm = T))
 
 #note! uv is larger mem; almost 5 GB ram itself
 temp.uv <- readNWISuv(siteNumbers = unique(g.get[g.get$data_type_cd == "uv", ]$site_no), 
@@ -63,26 +63,26 @@ temp.uv <- temp.uv %>%
          day = day(dateTime),
          year = year(dateTime)) %>%
   group_by(site_no, year, month, day) %>%
-  summarise(mn_daily_temp = mean(X_00010_00000)) %>% ungroup()
+  summarise(mn_daily_temp = mean(X_00010_00000, na.rm = T)) %>% ungroup() 
 
 temp.qw <- readNWISqw(siteNumbers = unique(g.get[g.get$data_type_cd == "qw", ]$site_no), 
                       parameterCd = "00010",
                       startDate = min(g.get[g.get$data_type_cd == "qw", ]$begin_date),
                       endDate = max(g.get[g.get$data_type_cd == "qw", ]$end_date))
-temp.qw <- temp.qw[is.na(temp.qw$sample_end_dt),] #get rid of apparent sample period rows (seems to be more than one day?)
+temp.qw <- temp.qw[is.na(temp.qw$sample_end_dt),] #get rid of representing a sample period instead of a day (seems to be more than one day?)
 temp.qw <- temp.qw %>%
   mutate(date = as.Date(sample_dt),
          month = month(sample_dt),
          day = day(sample_dt),
          year = year(sample_dt)) %>%
   group_by(site_no, year, month, day) %>%
-  summarise(mn_daily_temp = mean(result_va)) %>% ungroup()
+  summarise(mn_daily_temp = mean(result_va, na.rm = T)) %>% ungroup()
 
 #2. Calculate monthly mean temperature for each month of data ----
 temp <- bind_rows(temp.dv, temp.qw, temp.uv) %>%
   distinct(site_no, year, month, day, .keep_all = TRUE) %>%
   group_by(site_no, year, month) %>%
-  summarise(mn_monthly_temp = mean(mn_daily_temp),
+  summarise(mn_monthly_temp = mean(mn_daily_temp, na.rm = T),
             ct = n()) %>%
   arrange(year, month, site_no)
 
@@ -95,7 +95,7 @@ write_csv(temp, paste0(PATH, "/01_Data/USGS_gauge_monthly_wtemp.csv"))
 rm(temp.dv, temp.qw, temp.uv)
 
 #3. Exclude months with fewer than 20 days temp data ----
-temp <- temp %>% filter(ct >= 20) %>%
+temp <- temp %>% ungroup() %>% filter(ct >= 20) %>%
   mutate(date = with(., sprintf("%d-%02d", year, month)))
 
 length(unique(temp$site_no)) #only 23 of the original gauge stations have mean monthly water temperature data with > 20 records
@@ -159,7 +159,6 @@ for(j in 1:nrow(counties)) {
 }
 
 a_temp <- data.frame()
-# d_df <- d_df %>% filter(fips %in% redo$fips)
 for (i in 1:nrow(d_df)) {
   #make get url
   url <- paste0(base_url,
@@ -177,28 +176,89 @@ for (i in 1:nrow(d_df)) {
   d_df[i, "status"] <- req$status_code #to check specific sections that go wrong
   
   if(req$status_code == 200) {
+    
     res <- resp_body_json(req, simplifyVector = TRUE)$results
-    res$fips <- d_df[i, "fips"]
-    a_temp <- bind_rows(a_temp, res)
-    cat(paste0(d_df[i, "fips"], ": ", d_df[i, "start"], " to ", d_df[i, "end"]), "complete..\n")
+    
+    if(all(is.na(res$value))) { #for searches that go through but don't return any data
+      
+      d_df[i, "status"] <- NA
+      cat(paste0(d_df[i, "fips"], ": ", d_df[i, "start"], " to ", d_df[i, "end"]), "all NA..\n")
+      
+    } else {
+      #flag returns greater than given limit
+      if(resp_body_json(req, simplifyVector = TRUE)$metadata$resultset$count > 1000) { 
+        d_df[i, "status"] <- resp_body_json(req, simplifyVector = TRUE)$metadata$resultset$count
+      }
+      
+      res$fips <- d_df[i, "fips"]
+      a_temp <- bind_rows(a_temp, res)
+      cat(paste0(d_df[i, "fips"], ": ", d_df[i, "start"], " to ", d_df[i, "end"]), "complete..\n")
+      
+    }
+    
   } else {
+    
     cat(paste0(d_df[i, "fips"], ": ",d_df[i, "start"], " to ", d_df[i, "end"]), "bad request..\n")
+    
   }
   
   if(i == nrow(d_df)) { cat("\nDone!\n") }
 }
-rm(req, tmp, df12)
 
-#check run
-# a_temp %>% filter(is.na(value))
-
-# write_csv(a_temp, paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
-# a_temp2 <- read_csv(paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
-# a_temp3 <- bind_rows(a_temp %>% mutate(date = as.Date(date)), a_temp2)
-# a_temp <- a_temp3 %>% filter(!is.na(value))
+d_df %>% filter(status != 200 | is.na(status))
+#redo the bad requests...
+#check the NA runs... check: https://www.ncdc.noaa.gov/cdo-web/search , it's likely that temp is not available at those queries
+rm(req, tmp, df12, res)
 write_csv(a_temp, paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
 
+d_df2 <- d_df %>% filter(status != 200)
+d_df2$status_2 <- NA
+a_temp2 <- data.frame()
+for(i in 1:nrow(d_df2)) {
+  n <- d_df2[i, "status"]
+  tot <- seq(1000, n, by = 1000)
+  
+  sub_res <- data.frame()
+  for(s in 1:length(tot)) {
+    url <- paste0(base_url,
+                  "?datasetid=GHCND",
+                  "&datatypeid=TMAX&datatypeid=TMIN",
+                  "&locationid=FIPS:", d_df2[i, "fips"],
+                  "&startdate=", d_df2[i, "start"],
+                  "&enddate=", d_df2[i, "end"],
+                  "&units=metric",
+                  "&limit=1000", 
+                  "&offset=", tot[s])
+    req <- request(url) %>%
+      req_headers(token = api_token) %>%
+      req_error(is_error = function(resp) FALSE) %>% #don't stop if it's a bad request
+      req_perform()
+    
+    if(req$status_code == 200) {
+      res <- resp_body_json(req, simplifyVector = TRUE)$results
+      sub_res <- bind_rows(sub_res, res)
+      cat(paste0(d_df2[i, "fips"], ": ", d_df2[i, "start"], " to ", d_df2[i, "end"]), s, "offset complete..\n")
+    } else {
+      d_df2[i, "status_2"] <- "redo"
+      cat(paste0(d_df2[i, "fips"], ": ", d_df2[i, "start"], " to ", d_df2[i, "end"]), s, "offset bad request..\n")
+    }
+    
+    if(s == length(tot)) { cat(paste0(d_df2[i, "fips"], ": ", d_df2[i, "start"], " to ", d_df2[i, "end"]), "done!\n") }
+  }
+  
+  if(nrow(sub_res) != 0) {
+    sub_res$fips <- d_df2[i, "fips"]
+    a_temp2 <- bind_rows(a_temp2, sub_res)
+  }
+}
+a_temp2 <- distinct(a_temp2)
+a_temp3 <- bind_rows(a_temp, a_temp2) %>% distinct()
+write_csv(a_temp3, paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
+
+rm(a_temp2, a_temp3, req, sub_res, res, i, j, n, s, tot)
+
 #calc monthly means
+a_temp <- read_csv(paste0(PATH, "/01_Data/NOAA_daily_atemp.csv"))
 a_mn_temp <- a_temp %>%
   mutate(year = year(date),
          month = month(date)) %>%
@@ -222,3 +282,32 @@ a_mn_temp_id <- a_mn_temp %>%
 write_csv(a_mn_temp_id, paste0(PATH, "/01_Data/NOAA_monthly_atemp_wIDS.csv"))
 
 #5. Calculate least-squares linear regression for each site to predict stream temperature from air temperature ----
+a_temp <- read_csv(paste0(PATH, "/01_Data/NOAA_monthly_atemp_wIDS.csv")) %>% rename(air_temp = mn_monthly_temp)
+w_temp <- read_csv(paste0(PATH, "/01_Data/USGS_gauge_monthly_wtemp.csv")) %>%
+  rename(water_temp = mn_monthly_temp) %>%
+  filter(ct >= 20) %>%
+  mutate(date = with(., sprintf("%d-%02d", year, month)),
+         p_date = as.Date(paste0(date, "-01")))
+c_temp <- left_join(a_temp, w_temp, by = c("site_no", "p_date", "date", "year", "month")) %>%
+  relocate(site_no, fips, date, air_temp, water_temp)
+write_csv(c_temp, paste0(PATH, "/01_Data/combined_air_water_temp.csv"))
+
+c_temp <- split(c_temp, c_temp$site_no)
+
+r_list <- lapply(c_temp, function(site) {
+  
+  site <- site %>% arrange(date)
+  lsr <- lm(site$water_temp ~ site$air_temp)
+  lsr$site_no <- unique(site$site_no)
+  
+  return(lsr)
+})
+saveRDS(r_list, paste0(PATH, "/01_Data/fine_scale_temp_regressions.rds"))
+
+ggplot(data = r_list$`07198000`$model, aes(`site$air_temp`, `site$water_temp`)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y ~ x) +
+  scale_color_viridis_c() +
+  theme_classic()
+plot(r_list$`07198000`$model$`site$water_temp`, r_list$`07198000`$residuals)
+
