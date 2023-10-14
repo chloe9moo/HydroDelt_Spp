@@ -1,4 +1,4 @@
-## Clean + compile occurrence data for fish and inverts
+## Clean collected occurrence data for fish and inverts
 
 library(tidyverse); library(sf)
 options(readr.show_col_types = FALSE)
@@ -84,7 +84,7 @@ write_csv(adeq, paste0(PATH, "/01_BioDat/source_dat_cleaned/ADEQ_alltax_clean_",
 # df <- read_csv(paste0(PATH, "/01_BioDat/source_dat_cleaned/ADEQ_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
 rm(adeq, adeq2, na.coord, stid)
 
-#NAQWA data ----
+#USGS data ----
 #convert shp to csv
 # shp.list <- list.files(dat_path, pattern = "USGS.*\\.shp|20171018.*\\.shp", full.names = F) %>%
 #   sub("\\.shp.*$", "", .) %>%
@@ -419,34 +419,301 @@ rm(okcons)
 
 
 #OWSB ----
+owsb <- read_csv(paste0(dat_path, "/OKbugs_OWSB.csv")) %>%
+  rename(date = 'Activity Start Date',
+         lat = 'Monitoring Location Latitude',
+         long = 'Monitoring Location Longitude',
+         taxa_name = 'Taxonomic Name') %>%
+  mutate(date = mdy(date),
+         bio_type = "bug",
+         source = "OWSB",
+         taxa_name = ifelse(grepl("retire", taxa_name, ignore.case = TRUE), sub(".*use ", "", taxa_name), taxa_name)) %>%
+  distinct()
 
-#DO NEXT!!!!!
+write_csv(owsb, paste0(PATH, "/01_BioDat/source_dat_cleaned/owsb_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
+rm(owsb)
+
 
 #ONHI ----
+## convert shp to csv
+shp.list <- list.files(dat_path, pattern = "ONHI.*\\.shp", full.names = F) %>%
+  sub("\\.shp.*$", "", .) %>%
+  unique()
+
+lapply(shp.list, function(x) {
+  st_read(dsn = dat_path, layer = x) %>%
+    st_drop_geometry() %>%
+    write_csv(., file = paste0(dat_path, "/", x, ".csv"))
+})
+
+#clean data + bind + save
+file.list <- list.files(dat_path, pattern = "ONHI.*\\.csv$", full.names = T) %>% unique()
+
+onhi <- list()
+for(i in 1:length(file.list)) {
+  cat("\n\nCleaning", file.list[[i]], "\n")
+  onhi[[i]] <- fix_clean_occ(file.list[[i]],
+                             species.id.col = "sname",
+                             count.id.col = "occurrence", #commented out the min to 0 part of the function to make this work (since not numeric)
+                             site.id.col = c("location", "locality"),
+                             set.source = "ONHI", save.it = NA)
+  
+  flush.console()
+}
+
+onhi <- bind_rows(onhi) %>% distinct()
+
+unique(onhi$lox); unique(onhi$lax) #amount out of box not a concern
+onhi <- onhi %>% select(-lox, -lax)
+
+#fix count
+onhi <- onhi %>%
+  mutate(date = as.character(date),
+         date = case_when(grepl("date to year only", taxa_count, ignore.case = TRUE) ~ as.character(sub(".*/(\\d{4}).", "\\1", taxa_count)),
+                          grepl("^\\d{4}[:]", taxa_count) ~ sub("[:].*", "", taxa_count),
+                          T ~ date),
+         taxa_count = case_when(taxa_count == "NULL" ~ NA,
+                                grepl("no data", taxa_count, ignore.case = TRUE) ~ NA,
+                                grepl("^in ", taxa_count, ignore.case = TRUE) ~ sub(".*[;,] ", "", taxa_count),
+                                grepl("information not provided", taxa_count, ignore.case = TRUE) ~ NA,
+                                grepl("date to year only", taxa_count, ignore.case = TRUE) ~ sub("(\\d+) observed[.;].*", "\\1", taxa_count),
+                                grepl("number of specimens", taxa_count, ignore.case = TRUE) ~ sub("Number of Specimens: ", "", taxa_count),
+                                grepl("one fish collected|one fish present", taxa_count, ignore.case = TRUE) ~ "1",
+                                grepl("unpublished data", taxa_count, ignore.case = TRUE) ~ gsub("[^0-9]", "", taxa_count),
+                                grepl("early season, positive|late season, positive", taxa_count, ignore.case = TRUE) ~ "1",
+                                grepl("^\\d{4}:", taxa_count) ~ sub("^.*:", "", taxa_count),
+                                T ~ taxa_count),
+         taxa_count = case_when(grepl("observed$|observerd$|present$|Adult$|collected$|individuals$", taxa_count, ignore.case = TRUE) ~ sub("[A-Za-z\\s]+", "", taxa_count),
+                                grepl("creek|river|lake|pits|fork", taxa_count, ignore.case = TRUE) ~ sub("[,.].*", "", taxa_count),
+                                T ~ taxa_count),
+         taxa_count = case_when(grepl("^-", taxa_count) ~ sub(".*\\b(\\d+)\\b(?=\\s+present).*", "\\1", taxa_count, perl = TRUE),
+                                grepl("WERE COLLECTED", taxa_count) ~ "1",
+                                T ~ taxa_count),
+         taxa_count = sub("^\\s", "", taxa_count),
+         date = case_when(grepl("^\\d{4}[;]", taxa_count) ~ sub("[;].*", "", taxa_count),
+                          T ~ date),
+         taxa_count = sub(".*\\b(\\d+)\\s*(specimen|individual|collected|adult|observed|male|female|paratype|darters observed|indiv|young|seen|sighted|breed|dead|leopard|larvae|ad|ind).*", "\\1", taxa_count, ignore.case = T),
+         taxa_count = case_when(grepl("one", taxa_count, ignore.case = TRUE) ~ "1",
+                                grepl("two", taxa_count, ignore.case = TRUE) ~ "2",
+                                grepl("three", taxa_count, ignore.case = TRUE) ~ "3",
+                                grepl("four", taxa_count, ignore.case = TRUE) ~ "4",
+                                grepl("five", taxa_count, ignore.case = TRUE) ~ "5",
+                                grepl("six", taxa_count, ignore.case = TRUE) ~ "6",
+                                grepl("seven", taxa_count, ignore.case = TRUE) ~ "7",
+                                grepl("nine", taxa_count, ignore.case = TRUE) ~ "9",
+                                grepl("eight", taxa_count, ignore.case = TRUE) ~ "8",
+                                grepl("twelve", taxa_count, ignore.case = TRUE) ~ "12",
+                                grepl("twenty-six", taxa_count, ignore.case = TRUE) ~ "26",
+                                grepl("no ", taxa_count, ignore.case = TRUE) ~ "0",
+                                grepl("^\\d{4};", taxa_count) ~ sub("present", "", sub("^.*; ", "", taxa_count)),
+                                grepl("female found|male found|found while|and released|pigg|mm|duke|UV|black|river|odwc|creek", taxa_count, ignore.case = TRUE) ~ "1",
+                                T ~ taxa_count),
+         taxa_count = ifelse(grepl("^[^0-9]*$", taxa_count), "1", taxa_count),
+         taxa_count = ifelse(grepl("spec", taxa_count, ignore.case = TRUE), "6", taxa_count),
+         taxa_count = ifelse(grepl("captured and relocated", taxa_count), "2", taxa_count),
+         taxa_count = ifelse(grepl("^Crew", taxa_count), "20", taxa_count),
+         taxa_count = ifelse(taxa_count == "1983", "1", taxa_count),
+         taxa_count = ifelse(grepl("and", taxa_count), regmatches(taxa_count, regexpr("\\d+", taxa_count)), taxa_count),
+         taxa_count = as.numeric(taxa_count)) %>%
+  group_by(lat, long) %>%
+  mutate(site_id = paste("ONHI-", cur_group_id(), sep = "")) %>%
+  ungroup() %>%
+  distinct()
+
+write_csv(onhi, paste0(PATH, "/01_BioDat/source_dat_cleaned/onhi_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
+rm(onhi)
+
 
 #QUINN ----
+## convert shp to csv
+shp.list <- list.files(dat_path, pattern = "Quinn.*\\.shp", full.names = F) %>%
+  sub("\\.shp.*$", "", .) %>%
+  unique()
+
+lapply(shp.list, function(x) {
+  st_read(dsn = dat_path, layer = x) %>%
+    st_drop_geometry() %>%
+    write_csv(., file = paste0(dat_path, "/", x, ".csv"))
+})
+
+#clean data + bind + save
+file.list <- list.files(dat_path, pattern = "Quinn.*\\.csv$", full.names = T) %>% unique()
+lapply(file.list, function(x) head(read_csv(x)))
+
+quinn <- list()
+for(i in 2:length(file.list)) {
+  cat("\n\nCleaning", file.list[[i]], "\n")
+  quinn[[i]] <- fix_clean_occ(file.list[[i]],
+                              species.id.col = "species", 
+                              site.id.col = "site",
+                              set.source = "Quinn_AGFC", save.it = NA)
+  
+  flush.console()
+}
+
+q1 <- read_csv(file.list[[1]]) %>%
+  rename(lat = Lat_dd, long = Lon_dd, site_id = 'Site') %>%
+  mutate(species = "Percina pantherina",
+         across(.cols = contains("19")|contains("20"), ~ as.numeric(gsub("\\D", "", .x)))) %>%
+  pivot_longer(cols = contains("19")|contains("20"), names_to = "date", values_to = "taxa_count") %>%
+  select(site_id, lat, long, species, date, taxa_count) %>%
+  filter(!is.na(taxa_count)) %>%
+  distinct() %>%
+  mutate(bio_type = "fish", source = "Quinn_AGFC")
+
+quinn <- bind_rows(quinn) %>% distinct() %>% mutate(bio_type = "fish")
+
+quinn <- bind_rows(quinn, q1) %>% distinct()
+
+quinn <- quinn %>%
+  group_by(across(-c(date, taxa_count))) %>%
+  filter(n() > 1, !is.na(date)) %>% #remove rows that are NA in the date column, if that group already has other data
+  ungroup()
+
+write_csv(quinn, paste0(PATH, "/01_BioDat/source_dat_cleaned/quinn_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
+rm(quinn, q1)
 
 #RAM ----
+readxl::read_xlsx(paste0(dat_path, "/RAM_Invert_FOX_UTMs.xlsx")) %>% write_csv(., paste0(dat_path, "/RAM_Invert_FOX_UTMs_2.csv"))
+file.list <- list.files(dat_path, pattern = "RAM.*\\.csv$", full.names = T) %>% unique()
+lapply(file.list, function(x) head(read_csv(x)))
+
+ram <- lapply(file.list, function(x) {
+  df <- read_csv(x) %>%
+    select(Site, UTM_X, UTM_Y, Taxa, Totals, Date_col) %>%
+    rename(site_id = Site, taxa_name = Taxa, taxa_count = Totals, date = Date_col) %>%
+    mutate(date = as.character(date))
+  return(df)
+})
+
+ram <- lapply(ram, function(x){
+  err <- try(mutate(x, date = as.Date(date)))
+  if(inherits(err, "try-error")) {
+    x <- mutate(x, date = as.Date(format(strptime(date, format = "%d-%b-%y"), "%Y-%m-%d")))
+  } else {
+    x <- mutate(x, date = as.Date(date))
+  }
+})
+
+ram <- bind_rows(ram) %>% distinct() %>% filter(!is.na(UTM_X) & !is.na(UTM_Y))
+r2 <- ram %>%
+  st_as_sf(., coords = c("UTM_X", "UTM_Y"), crs = 26915, remove = FALSE) %>%
+  st_transform(., crs = 4326)
+ram <- cbind(ram, st_coordinates(r2)) %>% 
+  select(-UTM_X, -UTM_Y) %>%
+  rename(lat = Y, long = X) %>%
+  mutate(bio_type = "bug", source = "RAM")
+ram <- ram %>% mutate(lat = ifelse(lat < 10, lat * 10, lat)) #fix column coordinates
+
+write_csv(ram, paste0(PATH, "/01_BioDat/source_dat_cleaned/ram_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
+rm(ram, r2)
 
 #REQUEST UNKNOWN SRCE ----
+file.list <- list.files(dat_path, pattern = "Request.*\\.xlsx$", full.names = T) %>% unique()
+lapply(file.list, function(x){
+  readxl::read_xlsx(x) %>% 
+    write_csv(., paste0(sub(".xlsx", "", x), ".csv"))
+})
+
+file.list <- list.files(dat_path, pattern = "Request.*\\.csv$", full.names = T) %>% unique()
+lapply(file.list, function(x) head(read_csv(x)))
+
+ok_unk <- list()
+for(i in 1:length(file.list)) {
+  cat("\n\nCleaning", file.list[[i]], "\n")
+  ok_unk[[i]] <- fix_clean_occ(file.list[[i]], ignore.parse.err = TRUE,
+                               site.id.col = "WBID",
+                               count.id.col = c("Total", "NumRiff", "NumVeg", "NumWoody"),
+                               set.source = "OK_UNK", save.it = NA)
+  
+  flush.console()
+}
+
+ok_unk <- bind_rows(ok_unk)
+
+ok_unk <- ok_unk %>%
+  filter(!if_all(c("order", "family", "genus", "species"), is.na)) %>%
+  filter(!if_any(c("order", "family", "genus", "species"), ~grepl("hybrid", .x))) %>%
+  distinct()
+
+write_csv(ok_unk, paste0(PATH, "/01_BioDat/source_dat_cleaned/OK_UNK_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
+rm(ok_unk)
+
 
 #SMB ----
+shp.list <- list.files(dat_path, pattern = "SMB.*\\.shp", full.names = F) %>%
+  sub("\\.shp.*$", "", .) %>%
+  unique()
 
-# differences in gage data ----
+lapply(shp.list, function(x) {
+  st_read(dsn = dat_path, layer = x) %>%
+    st_drop_geometry() %>%
+    write_csv(., file = paste0(dat_path, "/", x, ".csv"))
+})
 
-Gages_and_years_with_adjustments <- read_excel("~/Downloads/Gages and years with adjustments.xlsx", 
-                                               col_types = c("numeric", "numeric", "text", 
-                                                             "numeric", "text", "text", "numeric", 
-                                                             "text", "numeric", "numeric", "numeric", 
-                                                             "numeric", rep("numeric", 181)), na = c("NA", "NaN", "Inf"))
-gage_year_HDI_202308XX <- read_excel("02_EnvDat/gage_year_HDI_202308XX.xlsx",
-                                     col_types = c("numeric", "numeric", "text", 
-                                                   "numeric", "text", "text", "numeric", 
-                                                   "text", "numeric", "numeric", "numeric", 
-                                                   "numeric", rep("numeric", 181)), na = c("NA", "NaN", "Inf"))
+#clean data + bind + save
+file.list <- list.files(dat_path, pattern = "SMB.*\\.csv$", full.names = T) %>% unique()
+SMB <- lapply(file.list, function(x) {
+  df <- read_csv(x) %>%
+    rename(site_id = ReachCode, taxa_count = M_dolomieu) %>%
+    mutate(species = "Micropterus dolomieu")
+  return(df)
+  })
 
-tmp <- bind_rows(
-  setdiff(Gages_and_years_with_adjustments, gage_year_HDI_202308XX),
-  setdiff(gage_year_HDI_202308XX, Gages_and_years_with_adjustments)
-)
-                                                             
+SMB <- bind_rows(SMB) %>% distinct()
+r2 <- SMB %>%
+  st_as_sf(., coords = c("site_x", "site_y"), crs = 26915, remove = FALSE) %>%
+  st_transform(., crs = 4326)
+SMB <- cbind(SMB, st_coordinates(r2)) %>% 
+  select(-site_x, -site_y) %>%
+  rename(lat = Y, long = X) %>%
+  mutate(bio_type = "fish", source = "SMB")
+
+SMB <- SMB %>% 
+  group_by(lat, long) %>%
+  mutate(site_id = paste("SMB-", cur_group_id(), sep = "")) %>%
+  ungroup() %>%
+  distinct()
+
+write_csv(SMB, paste0(PATH, "/01_BioDat/source_dat_cleaned/SMB_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
+rm(SMB, r2)
+
+#University of AR ----
+readxl::read_xlsx(paste0(dat_path, "/University of AR Tyler Fox fish and bugs.xlsx"),
+                         sheet = 2) %>%
+  write_csv(., paste0(dat_path, "/UnivAR_TylerFox_bugs.csv"))
+file.list <- list.files(dat_path, pattern = "UnivAR.*\\.csv$", full.names = T) %>% unique()
+
+ua_bug <- read_csv(paste0(dat_path, "/UnivAR_TylerFox_bugs.csv")) %>%
+  select('Activity Start Date', 'Monitoring Location ID', 'Monitoring Location Latitude', 'Monitoring Location Longitude',
+         'Characteristic Name', 'Result Value', 'Result Unit', 'Taxonomic Name') %>%
+  rename(date = 'Activity Start Date', site_id = 'Monitoring Location ID', lat = 'Monitoring Location Latitude',
+         long = 'Monitoring Location Longitude', taxa_name = 'Taxonomic Name', taxa_count = 'Result Value') %>%
+  filter(`Characteristic Name` == "Count") %>%
+  select(-`Characteristic Name`, -`Result Unit`) %>%
+  distinct() %>%
+  mutate(taxa_count = ifelse(taxa_count == 0, NA, taxa_count)) %>%
+  group_by(across(-c(date, taxa_count))) %>%
+  filter(n() > 1, !is.na(taxa_count)) %>% #remove rows that are NA in the date column, if that group already has other data
+  ungroup() %>%
+  mutate(bio_type = "bug", source = "OWSB",
+         taxa_name = ifelse(grepl("retire", taxa_name, ignore.case = TRUE), sub(".*use ", "", taxa_name), taxa_name))
+
+ua_fish <- read_csv(paste0(dat_path, "/UnivAR_TylerFox_fish.csv")) %>%
+  select('Activity Start Date', 'Monitoring Location ID', 'Monitoring Location Latitude', 'Monitoring Location Longitude',
+         'Characteristic Name', 'Result Value', 'Taxonomic Name') %>%
+  rename(date = 'Activity Start Date', site_id = 'Monitoring Location ID', lat = 'Monitoring Location Latitude',
+         long = 'Monitoring Location Longitude', species = 'Taxonomic Name', taxa_count = 'Result Value') %>%
+  filter(`Characteristic Name` == "Count") %>%
+  select(-`Characteristic Name`) %>%
+  distinct() %>%
+  mutate(bio_type = "fish", source = "OWSB",
+         species = ifelse(grepl("retire", species, ignore.case = TRUE), sub(".*use ", "", species), species))
+
+write_csv(bind_rows(ua_bug, ua_fish), paste0(PATH, "/01_BioDat/source_dat_cleaned/OWSB2_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
+rm(ua_bug, ua_fish)
+
+
+
+
+

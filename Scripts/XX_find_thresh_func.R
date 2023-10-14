@@ -1,4 +1,4 @@
-# functions for 01_FindSppThreshold.R
+# functions for finding species threhsolds etc.
 ##contains:
 ##1. function to calculate ratio of density splits / density observations
 ##2. function to output stacked ggplots for looking at different types of thresholds against cum. imp. curves, and presence / absence data (requires ggpubr!)

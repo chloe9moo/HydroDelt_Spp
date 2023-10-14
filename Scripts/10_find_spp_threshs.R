@@ -163,7 +163,7 @@ write_csv(CU_all, paste0(PATH, "/11_Thresholds/full_thresh_",
 
 # indiv. species plots to check things ----
 # library(ggpubr)
-# source(paste0(PATH, "/Scripts/01a_find_thresh_func.R"))
+# source(paste0(PATH, "/Scripts/XX_find_thresh_func.R"))
 # ##need to adjust to plot larger env gradients (e.g., WS Area)
 # CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.bugs.23.GW_HIT_cat.csv"))
 # gf.mod <- readRDS(file.list[[2]])

@@ -159,7 +159,13 @@ fix_clean_occ <- function(
   ct <- ct[, !grepl("TTL", colnames(ct))]
   if(ncol(ct) == 0) { cat("No count columns found in dataset. \n") 
     } else {
-    colnames(ct) <- "taxa_count"
+      
+      if(ncol(ct) > 1) {
+        ct$taxa_count <- rowSums(ct, na.rm = T)
+        ct <- select(ct, taxa_count)
+      } else {
+        colnames(ct) <- "taxa_count"
+      }
     
     if(min(ct, na.rm = TRUE) != 0) {
       ct[is.na(ct$taxa_count), ] <- 0
