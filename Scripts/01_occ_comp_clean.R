@@ -257,29 +257,30 @@ write_csv(mo, paste0(dat_path, "/MO_Fish_Community_Data_ALL.csv"))
 file.list <- list.files(dat_path, pattern = "^MO.*\\.csv$", full.names = T)
 file.list <- file.list[!grepl("USGS|2017", file.list)]
 
-mo <- lapply(file.list[1:2], function(x){
-  out <- read_csv(x) %>% 
-    rename(site_id = RCH_CODE,
-           taxa_name = Taxa,
-           genus = Genera)
-  out1 <- out %>% 
-    #this has coordinates that are WAY off like in south america, so fixing those
-    filter(UTM_X < 4493502 & UTM_X > 4025253 & UTM_Y < 843651 & UTM_Y > 314088) %>%
-    rename(UTM_X = UTM_Y, UTM_Y = UTM_X)
-  out2 <- out %>%
-    filter(UTM_X > 285100 & UTM_X < 835900 & UTM_Y > 3988500 & UTM_Y < 4491200)
-  out <- bind_rows(out1, out2)
-  out <- st_as_sf(out, coords = c("UTM_X", "UTM_Y"), crs = 26915, remove = FALSE) %>%
-    st_transform(., crs = 4326)
-  
-  out <- cbind(out, st_coordinates(out)) %>%
-    st_drop_geometry() %>%
-    rename(lat = Y, long = X) %>%
-    mutate(site_id = as.character(site_id), bio_type = "bug", source = "MO_UNK") %>%
-    select(-contains("UTM"), -STATE) %>%
-    distinct()
-})
-mo <- bind_rows(mo) %>% distinct()
+##NOTE! MO_bugs_comb* FILES ARE NOW EXCLUDED. THERE ARE TOO MANY ISSUES IN THE DATASETS
+# mo <- lapply(file.list[1:2], function(x){
+#   out <- read_csv(x) %>% 
+#     rename(site_id = RCH_CODE,
+#            taxa_name = Taxa,
+#            genus = Genera)
+#   out1 <- out %>% 
+#     #this has coordinates that are WAY off like in south america, so fixing those
+#     filter(UTM_X < 4493502 & UTM_X > 4025253 & UTM_Y < 843651 & UTM_Y > 314088) %>%
+#     rename(UTM_X = UTM_Y, UTM_Y = UTM_X)
+#   out2 <- out %>%
+#     filter(UTM_X > 285100 & UTM_X < 835900 & UTM_Y > 3988500 & UTM_Y < 4491200)
+#   out <- bind_rows(out1, out2)
+#   out <- st_as_sf(out, coords = c("UTM_X", "UTM_Y"), crs = 26915, remove = FALSE) %>%
+#     st_transform(., crs = 4326)
+#   
+#   out <- cbind(out, st_coordinates(out)) %>%
+#     st_drop_geometry() %>%
+#     rename(lat = Y, long = X) %>%
+#     mutate(site_id = as.character(site_id), bio_type = "bug", source = "MO_UNK") %>%
+#     select(-contains("UTM"), -STATE) %>%
+#     distinct()
+# })
+# mo <- bind_rows(mo) %>% distinct()
   
 mo2 <- read_csv(file.list[[3]]) %>%
   select(contains("UTM"), SEG_ID, Date, Scientific, Number) %>%
@@ -296,17 +297,17 @@ mo2 <- cbind(mo2, st_coordinates(mo2)) %>%
 
 mo3 <- read.csv(file.list[[4]]) %>%
   select(long, lat, RCH_CODE, Taxa, Date) %>%
-  rename(site_id = RCH_CODE, taxa_name = Taxa, date = Date) %>%
+  rename(site_id = RCH_CODE, taxa_name = Taxa, date = Date, long = lat, lat = long) %>%
   mutate(taxa_name = str_to_sentence(taxa_name),
          site_id = as.character(site_id), bio_type = "bug", source = "MO_UNK",
          date = as.Date(format(strptime(date, format = "%d-%b-%y"), "%Y-%m-%d"))) %>%
   distinct()
 
-mo_un <- bind_rows(mo, mo2, mo3)
+mo_un <- bind_rows(mo2, mo3)
 mo_un <- mo_un %>%
   filter(!is.na(lat) & !is.na(long)) %>%
   filter(!is.na(taxa_name)) %>%
-  distinct(taxa_name, genus, long, lat, date, .keep_all = TRUE) %>%
+  distinct(taxa_name, long, lat, date, .keep_all = TRUE) %>%
   mutate(HybridFlag = ifelse(grepl(" x ", taxa_name), "Y", "N")) %>%
   filter(HybridFlag == "N") %>% #remove hybrids
   select(-HybridFlag)
@@ -713,6 +714,23 @@ ua_fish <- read_csv(paste0(dat_path, "/UnivAR_TylerFox_fish.csv")) %>%
 write_csv(bind_rows(ua_bug, ua_fish), paste0(PATH, "/01_BioDat/source_dat_cleaned/OWSB2_alltax_clean_", gsub("-", "", Sys.Date()), ".csv"))
 rm(ua_bug, ua_fish)
 
+occ.dat <- lapply(file.list, function(x) read_csv(x, col_types = cols(site_id = col_character(), date = col_character(), date_min = col_character(), date_max = col_character())))
+
+#compiled data, final fixes ----
+occ.dat <- bind_rows(occ.dat) %>% distinct()
+
+occ.dat <- occ.dat %>%
+  mutate(lat2 = ifelse(lat < 0, long, lat),
+         long2 = ifelse(lat < 0, lat, long),
+         lat2 = ifelse(lat2 < 10, lat2 * 10, lat2)) %>%
+  select(-lat, -long, -HybridFlag) %>% #already been removed
+  rename(lat = lat2, long = long2) %>%
+  mutate(long = abs(long)*-1,
+         source = ifelse(is.na(source), "Matthews", source)) %>%
+  relocate(site_id, lat, long, date, order, family, genus, species, taxa_name, date_min, date_max, date_equal) %>%
+  distinct()
+
+write_csv(occ.dat, paste0(PATH, "/01_BioDat/occ_alltaxa_combined_nofilt_", gsub("-", "", Sys.Date()), ".csv"))
 
 
 
