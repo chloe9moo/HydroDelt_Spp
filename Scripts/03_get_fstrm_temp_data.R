@@ -651,7 +651,7 @@ g.xy <- bind_rows(g.info, other.dat) %>%
 hlnd <- st_as_sf(maps::map("county", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>% #EPSG 4269 = NAD83
   st_transform(., crs = 4269)
 
-sf_use_s2(TRUE)
+sf_use_s2(FALSE)
 
 counties <- hlnd %>% 
   st_join(., g.xy) %>% 
@@ -668,6 +668,7 @@ counties <- hlnd %>%
          county_name = ifelse(grepl("St ", county_name, fixed = TRUE), gsub("St ", "St. ", county_name), county_name), 
          county_name = ifelse(grepl("St. Louis City", county_name, fixed = TRUE), "St. Louis city", county_name)) %>%
   left_join(., ids %>% select(county_name, state_abbr, fips), by = c("county_name", "state_abbr")) #add in fips code for search
+# write_csv(counties, paste0(PATH, "/02_EnvDat/hit_info_otherdat_info.csv"))
 
 #download by county
 uniq.fips <- unique(counties$fips)
@@ -726,11 +727,6 @@ t.clim <- bind_rows(t.clim)
 
 write_csv(t.clim, paste0(PATH, "/02_EnvDat/raw_air_temp/usgs_air_monthly_temp_countylevel.csv"))
 
-
-#calculate single value per fips (not temporal)
-##CV
-##monthly means
-
 # + Plot data available ----
 #armook counties
 hlnd <- st_as_sf(maps::map("county", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>% #EPSG 4269 = NAD83
@@ -751,7 +747,14 @@ water_sites <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/all_water_temp_
                             T ~ "UCA_AdamsLab")) %>%
   st_as_sf(., coords = c("Long", "Lat"), crs = 4269)
 #county shp to fips join
-sf_use_s2(FALSE)
+# sf_use_s2(FALSE)
+eco.buff <- eco %>% st_buffer(dist = 0.09)
+
+water_sites <- water_sites %>% 
+  mutate(in_eco_reg = st_within(., eco.buff),
+         in_eco_reg = ifelse(as.numeric(in_eco_reg) == 1, TRUE, FALSE),
+         in_eco_reg = ifelse(is.na(in_eco_reg), FALSE, in_eco_reg))
+
 counties <- hlnd %>% 
   st_join(., water_sites) %>% 
   filter(!is.na(site_no)) %>% 
@@ -767,9 +770,7 @@ counties <- hlnd %>%
          county_name = ifelse(grepl("St ", county_name, fixed = TRUE), gsub("St ", "St. ", county_name), county_name), 
          county_name = ifelse(grepl("St. Louis City", county_name, fixed = TRUE), "St. Louis city", county_name)) %>%
   left_join(., ids %>% select(county_name, state_abbr, fips), by = c("county_name", "state_abbr")) #add in fips code for search
-
-t.clim <- read_csv(paste0(PATH, "/02_EnvDat/raw_air_temp/usgs_air_monthly_temp_countylevel.csv"))
-
+# write_csv(counties %>% st_drop_geometry(), paste0(PATH, "/02_EnvDat/raw_stream_temp/all_water_temp_locations_countyflowinfo.csv"))
 
 p1 <- ggplot() +
   geom_sf(data = hlnd) +
@@ -778,6 +779,7 @@ p1 <- ggplot() +
   geom_sf(data = water_sites, aes(shape = source, color = flw_type), size = 2) +
   scale_color_viridis_d(end = 0.9) +
   theme_minimal()
+# p1
 ggsave(paste0(PATH, "/99_figures/fine_scale_temp_site_map.png"), plot = p1, dpi = 300, width = 8, height = 6, bg = "white")
 
 
