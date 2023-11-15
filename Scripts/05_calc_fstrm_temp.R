@@ -38,12 +38,14 @@ r_list <- lapply(c_temp, function(site) {
 })
 saveRDS(r_list, paste0(PATH, "/02_EnvDat/fine_scale_temp_regressions.rds"))
 
-ggplot(data = r_list$`249`$model, aes(air_temp, water_temp)) +
-  geom_point() +
-  geom_smooth(method = "lm", formula = y ~ x) +
+##plot to look at regression ----
+ggplot(data = r_list$`07150500`$model, aes(air_temp, water_temp)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", formula = y ~ x, lwd = 0.7) +
   scale_color_viridis_c() +
   theme_classic() +
-  ggtitle("249")
+  ggtitle("")
+ggsave(paste0(PATH, "/99_figures/ex_fn_strm_temp_regression.png"), dpi = 300, height = 4, width = 4, bg = "white")
 # plot(r_list$`07198000`$model$water_temp, r_list$`07198000`$residuals)
 
 ##1a. Make table of linear regression results to examine ----
@@ -99,6 +101,7 @@ eco <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_high
   st_union()
 sf_use_s2(FALSE)
 ct.in.eco <- hlnd %>% st_filter(., eco)
+ct.in.eco <- bind_rows(ct.in.eco, hlnd %>% filter(ID %in% c("arkansas,desha","missouri,st louis city")))
 
 #filter out NULL models or poor performing models
 r_list <- r_list[!sapply(r_list, is.null)] #remove NULLs

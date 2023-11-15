@@ -1,5 +1,4 @@
 ## AUTOMATED SPP THRESHOLD DETERMINATION
-# by C.E.Moore V.
 # 
 # OBJ: Find individual species' threshold based on change in cumulative importance 
 
@@ -162,21 +161,25 @@ write_csv(CU_all, paste0(PATH, "/11_Thresholds/full_thresh_",
 # }) #end parallel
 
 # indiv. species plots to check things ----
-# library(ggpubr)
-# source(paste0(PATH, "/Scripts/XX_find_thresh_func.R"))
-# ##need to adjust to plot larger env gradients (e.g., WS Area)
-# CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.bugs.23.GW_HIT_cat.csv"))
-# gf.mod <- readRDS(file.list[[2]])
-# full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
-# spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species")
-# 
-# check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Orthocladiinae", pred_var = "fh10")
+library(ggpubr)
+source(paste0(PATH, "/Scripts/XX_find_thresh_func.R"))
+##need to adjust to plot larger env gradients (e.g., WS Area)
+CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.bugs.23.GW_full_cat.csv"))
+gf.mod <- readRDS(file.list[[1]])
+full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
+spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species")
+
+check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Chironomini", pred_var = "site_x")
 
 #save top spp plots
-# top_spp <- as.list((spp_imp %>% arrange(desc(rel_err)))[1:5, "species"]) 
-# lapply(top_spp, function(x) {
-#   for (var in iVars) {
-#     check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = x, pred_var = var, plot_it = F,
-#                     save_location = paste0(PATH, "/11_Thresholds/Plots"))
-#   }
-# })
+top_spp <- as.list((spp_imp %>% arrange(desc(rel_err)))[1:5, "species"])
+lapply(top_spp, function(x) {
+  for (var in iVars) {
+    check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = x, pred_var = var, plot_it = F,
+                    save_location = paste0(PATH, "/11_Thresholds/Plots"))
+  }
+})
+
+
+
+
