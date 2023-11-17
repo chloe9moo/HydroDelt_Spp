@@ -23,22 +23,31 @@ spp_list <- read_csv(paste0(PATH, "/XX_archive/species_list_original.csv"))
 # rm(fish, bug)
 
 #get variable list ----
-vars <- list.files(paste0(PATH, "/10_GFOutput/"), full.names = TRUE)
+vars <- list.files(paste0(PATH, "/10_GFOutput"), full.names = TRUE)
+vars <- vars[!file.info(vars)$isdir] #remove subdirectories
 vars <- lapply(vars, function(x){
   tmp <- readRDS(x)
   tmp <- names(tmp$X)
   return(tmp)
 })
 
-names(vars) <- gsub(".rds", "", list.files(paste0(PATH, "/10_GFOutput/")))
+names(vars) <- gsub(".rds", "", list.files(paste0(PATH, "/10_GFOutput/"))[-1])
 
 vars.all <- data.frame(var_type = names(vars), var = I(vars), stringsAsFactors = FALSE) %>%
   unnest(var)
+vars.notype <- vars.all %>%
+  mutate(var_type = gsub("gf\\.(bugs|fish)\\.23\\.(GW|GWlump|Int|RO)[._](full|HIT|LULC)(_cat)?", "\\3", var_type)) %>%
+  distinct() %>%
+  filter(var_type == "full") %>% 
+  filter(!grepl("[Cc]at", var))
 vars.all <- vars.all %>%
   mutate(var_type = gsub("gf\\.(bugs|fish)\\.23\\.(GW|GWlump|Int|RO)[._](full|HIT|LULC)(_cat)?", "\\3", var_type)) %>%
   distinct() %>%
-  filter(var_type != "full") %>%
+  filter(var_type != "full") %>% 
   filter(!(var_type == "LULC" & grepl("[Cc]at", var))) #going to do watershed vars only
+
+vars.all <- bind_rows(vars.all, 
+                      vars.notype %>% filter(!var %in% vars.all$var) )#add site_x and y back in
 
 ##add in new variables ----
 #mcmanamay hydro alt vars
@@ -51,7 +60,7 @@ vars.all <- bind_rows(
 )
 
 #predicted stream temp
-strm.temp <- data.frame(var_type = rep("LULC", length(names(bug)[grepl("temp", names(bug))])), var = names(bug)[grepl("temp", names(bug))])
+strm.temp <- data.frame(var_type = rep("HIT", length(names(bug)[grepl("temp", names(bug))])), var = names(bug)[grepl("temp", names(bug))])
 strm.temp <- strm.temp %>%
   filter(grepl("8.5", var)) %>% #since it's only historical, doesn't really matter because the two models are the same
   filter(grepl("cv|ssn", var)) %>% #only doing seasonal avgs
@@ -180,7 +189,8 @@ for(i in 1:length(all)) {
         if(is.na(g)) { ga <- "all" } else { ga <- g }
         
         cat("\nRunning", bio, ":", f, "flow,", ga, "gage,", var, "variable type...\n")
-        file.name <- paste0(PATH,  "/10_GFOutput/", gsub("-", "_", Sys.Date()), "/gf_", bio, "_", f, "_", ga, "gage_", var, ".rds")
+        # file.name <- paste0(PATH,  "/10_GFOutput/", gsub("-", "_", Sys.Date()), "/gf_", bio, "_", f, "_", ga, "gage_", var, ".rds")
+        file.name <- paste0(PATH,  "/10_GFOutput/2023_11_14/gf_", bio, "_", f, "_", ga, "gage_", var, ".rds") #forgot x y vars
         if(file.exists(file.name)) { cat("Model exists, next.\n"); next }
         
         gf.out <- NULL
@@ -192,7 +202,7 @@ for(i in 1:length(all)) {
                          gage.type = g #gage type to run, set as NA if all
         )
 
-        saveRDS(gf.out, file = file.name)
+        saveRDS(gf.out, file = file.name) #saving bc it would be massive to store all of them in memory
 
         Sys.sleep(1)
 
@@ -201,38 +211,3 @@ for(i in 1:length(all)) {
   }
 }
 
-
-
-
-
-# most_important.gf.GW_lump <- names(importance(gf.out))[0:25]
-# most_important.gf.GW_lump
-# 
-# #GF model plots
-# plot(gf.out , plot.type = "O", xlab="")
-# plot(gf.fish.23.Int.full, plot.type = "O", xlab="")
-# 
-# ##note: because of the way the function is set up, need to run the following line before running split density plot
-# gf.out$call$compact <- TRUE
-# gf.out$call$nbin <- nbin
-# plot(gf.out, plot.type = "S", imp.vars = most_important.gf.GW_lump,
-#      leg.posn = "topright", cex.legend = 0.9, cex.axis = 0.9,
-#      cex.lab = 1, line.ylab = 0.9, par.args = list(mgp = c(1.5, 0.5, 0), mar = c(3.1, 1.5, 0.1, 1)))
-# 
-# plot(gf.out, plot.type = "C", imp.vars = most_important.gf.GW_lump,
-#      show.overall = F, legend = T, leg.posn = "topleft",
-#      leg.nspecies = 5, cex.lab = 0.9, cex.legend = 0.9, ylim=c(0,0.4),
-#      cex.axis = 1, line.ylab = 0.9, par.args = list(mgp = c(1.5,
-#                                                             0.5, 0), mar = c(2.5, 1, 0.5, 0.5), omi = c(0,0.3, 0, 0)))
-# 
-# plot(gf.out, plot.type = "C", imp.vars = most_important.gf.GW_lump,
-#      show.species = F, common.scale = T, cex.axis = 1,
-#      cex.lab = 1, line.ylab = 0.9, par.args = list(mgp = c(1.5,
-#                                                            0.5, 0), mar = c(2.5, 1, 1, 0.5), omi = c(0,0.3, 0, 0)))
-# 
-# par(oma=c(7,3,1,1),mar=c(2,2,2,2),mfrow=c(2,1))
-# plot(gf.out, plot.type = "P", show.names = T, horizontal = F,
-#      cex.axis = 1, cex.labels = 0.6, line = 2.5, ylim=c(0,1))
-# 
-# 
-# plot(gf.out, plot.type = "Split.Density")
