@@ -84,10 +84,10 @@ rm(l1, i, a_temp)
 #2. predict stream temp ----
 r_list <- readRDS(paste0(PATH, "/02_EnvDat/fine_scale_temp_regressions.rds")) #regressions
 lm_res <- read_csv(paste0(PATH, "/02_EnvDat/fine_scale_temp_regression_results.csv")) #regression results
-g.xy <- read_csv(paste0(PATH, "/02_EnvDat/hit_info_otherdat_info.csv")) #county info on sites (usgs gage and other dat)
+g.xy <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_prevHITsites_countyinfo.csv")) #county info on sites (usgs gage and other dat)
 water_sites <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/all_water_temp_locations_info.csv")) %>% #location info on strm temp sites
   st_as_sf(., coords = c("Long", "Lat"), crs = 4269)
-g.info <- read_csv(paste0(PATH, "/02_EnvDat/all_hit_usgs_gage_info.csv")) %>% #target gage location info
+g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_all_prevHITsites_info.csv")) %>% #target gage location info
   select(site_no, dec_long_va, dec_lat_va) %>%
   distinct() %>%
   st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269)
@@ -237,11 +237,9 @@ for (i in 1:nrow(hit)) {
 write_csv(pred_temps, paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly.csv"))
 
 #plotting for examples ----
-# g.info <- dataRetrieval::whatNWISdata(siteNumbers = unique(hit$STAID_0)) #get xy and save for usgs sites
-# write_csv(g.info, paste0(PATH, "/02_EnvDat/all_hit_usgs_gage_info.csv"))
 water_sites <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/all_water_temp_locations_info.csv")) %>%
   st_as_sf(., coords = c("Long", "Lat"), crs = 4269)
-g.info <- read_csv(paste0(PATH, "/02_EnvDat/all_hit_usgs_gage_info.csv")) %>%
+g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_all_prevHITsites_info.csv")) %>%
   select(site_no, dec_long_va, dec_lat_va) %>%
   distinct() %>%
   st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269)

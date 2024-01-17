@@ -19,6 +19,9 @@ source(paste0(PATH, "/Scripts/XX_api_token.R"))
 
 hit <- read_csv(paste0(PATH, "/02_EnvDat/Updated_HIT_4.23.a.csv")) #<< all stations in ARMOOK, HIT calculated
 
+# g.info <- dataRetrieval::whatNWISdata(siteNumbers = unique(hit$STAID_0)) #get xy for all sites and save for usgs sites for later
+# write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_all_prevHITsites_info.csv"))
+
 #1. Download temperature data for USGS gages ----
 # https://waterdata.usgs.gov/blog/dataretrieval/
 #get site numbers from data:
@@ -668,7 +671,7 @@ counties <- hlnd %>%
          county_name = ifelse(grepl("St ", county_name, fixed = TRUE), gsub("St ", "St. ", county_name), county_name), 
          county_name = ifelse(grepl("St. Louis City", county_name, fixed = TRUE), "St. Louis city", county_name)) %>%
   left_join(., ids %>% select(county_name, state_abbr, fips), by = c("county_name", "state_abbr")) #add in fips code for search
-# write_csv(counties, paste0(PATH, "/02_EnvDat/hit_info_otherdat_info.csv"))
+# write_csv(counties, paste0(PATH, "/02_EnvDat/usgs_gage_prevHITsites_countyinfo.csv"))
 
 #download by county
 uniq.fips <- unique(counties$fips)

@@ -1,4 +1,4 @@
-# COMPARE GF MODEL OUTPUTS
+### COMPARE GF MODEL OUTPUTS ###
 #make summary figures for comparing variable types, taxa, gage types etc.
 
 library(tidyverse); library(gradientForest)
@@ -9,10 +9,7 @@ PATH <- getwd()
 gf.list <- list.files(paste0(PATH, "/10_GFOutput/2023_11_14"), ".rds", full.names = TRUE)
 
 #set colors for consistency ----
-c.pal <- c("?" = "#000000", "climate" = "#0077BB", "geology/lithology" = "#BBBBBB", "hydrology" = "#33BBEE",
-           "land use" = "#EE3377", "soil" = "#CC3311", "spatial" = "#009988", "stream temp" = "#EE7733")
-flow.pal <- c("GW" = "#7070FF", "Int" = "#FD5D5D", "RO" = "#FFB05C")
-gage.pal <- c("non-ref" = "#F46036", "ref" = "#5B85AA", "all" = "#808080")
+source(paste0(PATH, "/Scripts/XX_colors.R"))
 
 gf_file <- gf.list[[1]] #testing
 
@@ -65,7 +62,7 @@ v.imp <- v.imp %>%
                                   grepl("ssn|cv", env_var) ~ "stream temp",
                                   grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
                                   grepl("pn", env_var) ~ "hydrologic alteration",
-                                  grepl("Dam|Rd|Pct|NABD", env_var) ~ "land use",
+                                  grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
                                   grepl("Elev|Area|site_", env_var) ~ "spatial",
                                   grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
                                   grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
@@ -157,7 +154,7 @@ ci <- ci %>%
                                   grepl("ssn|cv", env_var) ~ "stream temp",
                                   grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
                                   grepl("pn", env_var) ~ "hydrologic alteration",
-                                  grepl("Dam|Rd|Pct|NABD", env_var) ~ "land use",
+                                  grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
                                   grepl("Elev|Area|site_", env_var) ~ "spatial",
                                   grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
                                   grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
@@ -288,7 +285,7 @@ ci.cur <- ci.cur %>%
                                   grepl("ssn|cv", env_var) ~ "stream temp",
                                   grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
                                   grepl("pn", env_var) ~ "hydrologic alteration",
-                                  grepl("Dam|Rd|Pct|NABD", env_var) ~ "land use",
+                                  grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
                                   grepl("Elev|Area|site_", env_var) ~ "spatial",
                                   grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
                                   grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",

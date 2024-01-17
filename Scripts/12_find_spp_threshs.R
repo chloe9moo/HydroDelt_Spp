@@ -3,24 +3,24 @@
 # OBJ: Find individual species' threshold based on change in cumulative importance 
 
 library(tidyverse); library(gradientForest)
-# library(parallel) #<<multimodel runs
+library(parallel) #<<multimodel runs
 
 # set variables----
 PATH <- getwd()
 
 #which model(s) to analyze? (what is the name of the file)
-file.name <- paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_full_cat.rds")  #single model run
-# file.list <- list.files(paste0(PATH, "/10_GFOutput"), pattern = "gf.", full.names = T)
+# file.name <- paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_full_cat.rds")  #single model run
+file.list <- list.files(paste0(PATH, "/10_GFOutput"), pattern = "gf.", full.names = T)
 #how many variables (ordered by importance) to threshold?
-num.vars <- 5
+num.vars <- 10
 #what is the allowable slope cut off for consolidating thresholds - ie, percent of targeted slope?
 prx.val <- 0.60 #<< could be part of the threshold if its at least 60% of the highest slope value
 #what is the allowable slope cut off for alternative thresholds besides highest slope?
 sl2.val <- 0.80 #<< other peaks are highlighted if slope is greater then at least 80% of highest slope value
 
 # load necessary files // start multi model run ----
-# n.cores <- detectCores()/2
-# mclapply(file.list, mc.cores = n.cores, function(file.name) { #start parallel run, ~3 min for 18 models on 8 cores, max ~14 GB RAM
+n.cores <- detectCores()/2
+mclapply(file.list, mc.cores = n.cores, function(file.name) { #start parallel run, ~3 min for 18 models on 8 cores, max ~14 GB RAM
   
 gf.mod <- readRDS(file.name) #gf model of interest
 
@@ -158,18 +158,18 @@ write_csv(CU_all, paste0(PATH, "/11_Thresholds/full_thresh_",
                          gsub(".rds", "", gsub(paste0(PATH, "/10_GFOutput/"), "", file.name)), #matching name to GF model names
                          ".csv"))
 
-# }) #end parallel
+}) #end parallel
 
 # indiv. species plots to check things ----
 library(ggpubr)
 source(paste0(PATH, "/Scripts/XX_find_thresh_func.R"))
 ##need to adjust to plot larger env gradients (e.g., WS Area)
-CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.bugs.23.GW_full_cat.csv"))
-gf.mod <- readRDS(file.list[[1]])
+CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.fish.23.GWlump.full.csv"))
+gf.mod <- readRDS(file.list[[10]])
 full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
 spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species")
 
-check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Chironomini", pred_var = "site_x")
+check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Etheostoma.radiosum", pred_var = "TmeanWs")
 
 #save top spp plots
 top_spp <- as.list((spp_imp %>% arrange(desc(rel_err)))[1:5, "species"])

@@ -1,0 +1,125 @@
+## MISC. PLOTS ##
+
+library(tidyverse); library(sf)
+
+PATH <- getwd()
+
+source(paste0(PATH, "/Scripts/XX_colors.R"))
+
+# study area ----
+#eco region of interest
+eco <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp")) #%>%
+#   st_union()
+
+#armook 
+hlnd <- st_as_sf(maps::map("state", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>% #EPSG 4269 = NAD83
+  st_transform(., crs = 4269)
+
+#USGS gages
+g.info <- read_csv(paste0(PATH, "/02_EnvDat/all_hit_usgs_gage_info.csv")) %>%
+  select(site_no, dec_long_va, dec_lat_va) %>%
+  distinct() %>%
+  st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269)
+g.info <- g.info %>%
+  st_filter(., eco)
+
+g.buff <- g.info %>% st_buffer(., dist = 15000) %>% st_union()
+
+#get flow types
+#assign flow_type to each site + calc distance to nearest line (meters)
+flw <- st_read(dsn = paste0(PATH, "/02_EnvDat/raw_flow_regime_dat/Interior Highlands Natural Flow Regimes.gdb"), layer = "Polylines") %>% select(-PopupInfo) %>%
+  st_transform(4269)
+flw <- flw %>% filter(Flow_type != "BigR")
+nr.line <- st_nearest_feature(g.info, flw, check_crs = TRUE) #find nearest strm not river
+flw_near <- flw[nr.line,]
+g.info$flw_name <- flw_near$Name #add strm names
+g.info$flw_type <- flw_near$Flow_type #add flow types
+# dist <- as.vector(st_distance(alb.sites, flw_near, by_element = TRUE)) #get distance from site to strm assigned
+# temp.sites$dist2strm_m_flw <- dist
+
+rm(flw, flw_near, nr.line)
+
+#bio dat
+occ.dat <- lapply(list.files(paste0(PATH, "/01_BioDat"), pattern = "^occ_(bug|fish)", full.names = T), function(x) {
+  df <- read_csv(x) %>%
+    select(lat, long, phylum) %>%
+    distinct()
+})
+occ.dat <- bind_rows(occ.dat) %>%
+  st_as_sf(., coords = c("long", "lat"), crs = 4269) %>%
+  mutate(taxa = ifelse(phylum == "Arthropoda", "aquatic insect", "fish")) %>%
+  st_filter(., eco)
+
+occ.buff <- occ.dat %>%
+  st_filter(., st_make_valid(g.buff))
+
+#plot
+ggplot() +
+  geom_sf(data = hlnd) +
+  geom_sf(data = eco, fill = NA) +
+  geom_sf(data = occ.dat, aes(fill = taxa), shape = 21, size = 2, alpha = 0.5) +
+  # geom_sf(data = occ.buff, aes(fill = taxa), shape = 21, size = 2, alpha = 0.5) +
+  geom_sf(data = g.info, aes(shape = flw_type, color = flw_type), size = 3) +
+  # geom_sf(data = g.buff, fill = NA) +
+  scale_fill_manual(values = tax.pal, name = "Survey Site") +
+  scale_color_manual(values = flow.pal, name = "Flow Regime") +
+  scale_shape_manual(values = c(16, 17, 18), name = "Flow Regime") +
+  coord_sf(xlim = c(-98, -89)) +
+  theme_minimal() +
+  theme(panel.grid.major = element_line(linetype = "dashed"),
+        legend.text = element_text(size = 12))
+
+ggsave(paste0(PATH, "/99_figures/study_map_allocc.png"), width = 7, height = 6, bg = "white")
+
+# species threshold comp plots ----
+thresh_df <- lapply(list.files(paste0(PATH, "/11_Thresholds"), pattern = "full_thresh", full.names = TRUE), read_csv)
+
+#get type of model and add to dataframe
+for(i in 1:length(thresh_df)) {
+  
+  thresh_df[[i]]$name <- sub(".csv", "", 
+                             sub("full_thresh_gf.", "", 
+                                 list.files(paste0(PATH, "/11_Thresholds"), pattern = "full_thresh")[[i]]))
+  
+  thresh_df[[i]] <- thresh_df[[i]] %>%
+    mutate(taxa = case_when(grepl("bug", name) ~ "bug",
+                            grepl("fish", name) ~ "fish"),
+           flow_type = case_when(grepl("GW", name) ~ "GW",
+                                 grepl("Int", name) ~ "Int",
+                                 grepl("RO", name) ~ "RO"),
+           var_type = case_when(grepl("HIT", name) ~ "HIT",
+                                grepl("LULC", name) ~ "LULC",
+                                TRUE ~ "full"))
+  
+}
+
+thresh_df <- bind_rows(thresh_df)
+
+#boxplot comparing flow type thresholds (fish only)
+fish <- thresh_df %>% 
+  filter(taxa == "fish")
+
+#get thresholds:
+tmp <- fish %>%
+  filter(var_type == "HIT") %>%
+  select(species, env_var, flow_type, t_max_mn, t_m2_mn, t_max_prop, t_m2_prop) %>%
+  distinct() %>%
+  mutate(prop = case_when(t_m2_prop > t_max_prop & !is.na(t_m2_prop) ~ t_m2_prop, #find larger prop threshold
+                          TRUE ~ t_max_prop),
+         thresh = case_when(prop == t_max_prop ~ t_max_mn,
+                            TRUE ~ t_m2_mn)) %>% 
+  filter(prop >= 25) %>% #only a threshold if the change is greater than 25% of the overall cum. imp. curve
+  select(-contains("t_")) %>%
+  #remove variables only with one flow type showing up (for visualization purposes)
+  group_by(env_var) %>%
+  filter(length(unique(intersect(flow_type, unique(fish$flow_type)))) >= 2) %>%
+  ungroup()
+
+ggplot() +
+  geom_boxplot(data = tmp, aes(x = flow_type, y = thresh, fill = flow_type)) +
+  geom_jitter(data = tmp, aes(x = flow_type, y = thresh), alpha = 0.4, width = 0.3) +
+  facet_wrap(~ env_var, scales = "free_y", nrow = 2) +
+  scale_fill_manual(values = flow.pal) +
+  theme_bw() + xlab("") + ylab("species threshold value")
+ggsave(paste0(PATH, "/99_figures/spp_thresh_boxplot_flowcomp.png"), bg = "white", width = 12, height = 5)
+

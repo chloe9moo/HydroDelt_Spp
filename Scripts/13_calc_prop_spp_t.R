@@ -3,19 +3,19 @@
 # OBJ: Calculate proportion of species with a threshold
 
 library(tidyverse); library(gradientForest)
-# library(parallel)
+library(parallel)
 
 PATH <- getwd()
 # source(paste0(PATH, "/Scripts/XX_find_thresh_func.R"))
 
-file.name <- "full_thresh_gf.bugs.23.GW_full_cat.csv" #<<which threshold file to analyze // single model runs
-# file.list <- list.files(paste0(PATH, "/11_Thresholds"), pattern = "full_thresh", full.names = F) #parallel / multi model runs
+# file.name <- "full_thresh_gf.bugs.23.GW_full_cat.csv" #<<which threshold file to analyze // single model runs
+file.list <- list.files(paste0(PATH, "/11_Thresholds"), pattern = "full_thresh", full.names = F) #parallel / multi model runs
 
 #<< what proportion of overall cum imp curve must the threshold be to count (C2) + proportion of presences (C3, C4)? unit = percent
 t_prop_val <- 25 
 
-# n.cores <- detectCores()/2
-# mclapply(file.list, mc.cores = n.cores, function(file.name) { #start parallel run, ~6 min for 18 models, up to 14.5 GB RAM
+n.cores <- detectCores()/2
+mclapply(file.list, mc.cores = n.cores, function(file.name) { #start parallel run, ~6 min for 18 models, up to 14.5 GB RAM
 
 t <- read_csv(paste0(PATH, "/11_Thresholds/", file.name)) 
 
@@ -153,7 +153,7 @@ cat("\nCriteria 4 calculated..\n")
 p.t.df <- p.t.df %>% mutate(across(where(is.numeric), ~ round(.x, 2)))
 write_csv(p.t.df, paste0(PATH, "/11_Thresholds/PropThresh_", gsub("full_thresh_", "", file.name)))
 
-# }) #end parallel
+}) #end parallel
 
 # Criteria X. Spp above ratio dens split importance:dens obs ---
 #from Chen et al. 2023 -- think this isn't relevant, it's regarding density not cumulative importance (ie splits density plots, not cum imp plots)
@@ -165,32 +165,33 @@ write_csv(p.t.df, paste0(PATH, "/11_Thresholds/PropThresh_", gsub("full_thresh_"
 #find species with threshold density ratio > 1
 
 #plot comparing some proportions ----
+source("/Scripts/XX_colors.R")
+prop.list <- list.files(paste0(PATH, "/11_Thresholds"), "PropThresh_gf.bugs.23", full.names = TRUE)
 
-# prop.list <- list.files(paste0(PATH, "/11_Thresholds"), "PropThresh_gf.bugs.23", full.names = TRUE)
-# 
-# prop.res <- lapply(prop.list, read_csv)
-# 
-# for(i in 1:length(prop.res)) {
-#   prop.res[[i]]$flow_type <- sub(".csv", "", sub(paste0(PATH, "/11_Thresholds/PropThresh_gf.bugs.23."), "", prop.list[[i]]))
-# }
-# 
-# prop.res <- bind_rows(prop.res)
-# 
-# prop.res <- prop.res %>%
-#   filter(grepl("full", flow_type)) %>%
-#   mutate(flow_type = sub("_full_cat", "", flow_type))
-# ex.g <- expand.grid(env_var = unique(prop.res$env_var), flow_type = unique(prop.res$flow_type))
-# prop.res <- merge(prop.res, ex.g, all = TRUE) %>%
-#   mutate(across(where(is.numeric), ~ifelse(is.na(.x), 0, .x)))
-# 
-# ggplot() +
-#   geom_col(data = prop.res, aes(x = env_var, y = C_3, fill = flow_type), color = "black", position = "dodge") +
-#   theme_classic() +
-#   scale_fill_viridis_d(end = 0.8) +
-#   scale_y_continuous(expand = c(0,0), name = "Prop. spp w/ threshold") +
-#   theme(panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed")) +
-#   ggtitle("Criteria 3") + xlab("")
-# ggsave(paste0(PATH, "/99_figures/ex_spp_thresh_barcomp.png"), bg = "white", height = 3, width = 8)
+prop.res <- lapply(prop.list, read_csv)
+
+for(i in 1:length(prop.res)) {
+  prop.res[[i]]$flow_type <- sub(".csv", "", sub(paste0(PATH, "/11_Thresholds/PropThresh_gf.bugs.23."), "", prop.list[[i]]))
+}
+
+prop.res <- bind_rows(prop.res)
+
+prop.res <- prop.res %>%
+  filter(grepl("full", flow_type)) %>%
+  mutate(flow_type = sub("_full_cat", "", flow_type))
+ex.g <- expand.grid(env_var = unique(prop.res$env_var), flow_type = unique(prop.res$flow_type))
+prop.res <- merge(prop.res, ex.g, all = TRUE) %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.x), 0, .x)))
+
+ggplot() +
+  geom_col(data = prop.res, aes(x = env_var, y = C_3, fill = flow_type), color = "black", position = "dodge") +
+  theme_classic() +
+  scale_fill_manual(values = flow.pal, name = "Flow Regime") +
+  scale_y_continuous(expand = c(0,0), name = "Prop. spp w/ threshold") +
+  theme(panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed"),
+        axis.text.x = element_text(color = "black", angle = 45, vjust = 0.95, hjust = 0.95)) +
+  ggtitle("Aquatic Insects - Combined Criteria") + xlab("")
+ggsave(paste0(PATH, "/99_figures/ex_spp_thresh_barcomp.png"), bg = "white", height = 5, width = 10)
 
 
 
