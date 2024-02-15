@@ -74,7 +74,7 @@ fix_clean_occ <- function(
           dc$date_max <- do.call(pmax, c(dc[, date_cols], na.rm = TRUE))
           dc$date_equal <- dc$date_min == dc$date_max
           
-        } else { #if there is more than one column that is dupulicated OR only one column
+        } else { #if there is more than one column that is duplicated OR only one column
           dc$date <- dc[, 1] #just take the first column and name it date
         }
         

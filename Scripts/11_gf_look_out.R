@@ -6,7 +6,7 @@ options(readr.show_col_types = FALSE)
 
 PATH <- getwd()
 
-gf.list <- list.files(paste0(PATH, "/10_GFOutput/2023_11_14"), ".rds", full.names = TRUE)
+gf.list <- list.files(paste0(PATH, "/10_GFOutput/2024_02_12"), ".rds", full.names = TRUE)
 
 #set colors for consistency ----
 source(paste0(PATH, "/Scripts/XX_colors.R"))
@@ -43,10 +43,10 @@ v.imp <- lapply(gf.list, function(gf_file) { #get raw weighted R2 data
 
 v.imp <- bind_rows(v.imp)
 
-write_csv(v.imp, paste0(PATH, "/10_GFOutput/2023_11_14/results_tables/variable_importance_R2_combined.csv"))
+write_csv(v.imp, paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/variable_importance_R2_combined.csv"))
 
 ##plot VI (weighted R2) ----
-v.imp <- read_csv(paste0(PATH, "/10_GFOutput/2023_11_14/results_tables/variable_importance_R2_combined.csv"))
+v.imp <- read_csv(paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/variable_importance_R2_combined.csv"))
 
 #get variable types for colors
 v.imp <- v.imp %>% 
@@ -78,7 +78,7 @@ for(sel.taxa in taxa.vect) {
     fl.lvl <- v.imp %>%
       filter(taxa == sel.taxa & var_grp == v.group & gage == "all") %>%
       group_by(flow) %>%
-      do(data_frame(al=levels(reorder(interaction(.$flow, .$env_var, drop=TRUE), .$weighted_r2)))) %>%
+      do(tibble(al=levels(reorder(interaction(.$flow, .$env_var, drop=TRUE), .$weighted_r2)))) %>%
       pull(al)
     #plot
     plot.df <- v.imp %>%
@@ -95,7 +95,7 @@ for(sel.taxa in taxa.vect) {
       scale_fill_manual(values = c.pal, name = "Variable Type") +
       theme_bw() + ggtitle(paste0(str_to_title(sel.taxa), ": ", v.group, " variables")) + ylab("")
     
-    ggsave(paste0(PATH, "/10_GFOutput/2023_11_14/figures/", sel.taxa, "_variable_importance_", v.group, "vars.png"), plot = p1, width = 8, height = 9)
+    ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_variable_importance_", v.group, "vars.png"), plot = p1, width = 8, height = 9)
     
   }
 }
@@ -160,10 +160,10 @@ ci <- ci %>%
                                   grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
                                   T ~ "?"))
 
-write_csv(ci, paste0(PATH, "/10_GFOutput/2023_11_14/results_tables/cumulative_importance_combined.csv"))
+write_csv(ci, paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_combined.csv"))
 
 ##plot CI ----
-ci <- read_csv(paste0(PATH, "/10_GFOutput/2023_11_14/results_tables/cumulative_importance_combined.csv"))
+ci <- read_csv(paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_combined.csv"))
 
 ##+ all taxa, all var models ----
 plot.df <- ci %>%
@@ -191,7 +191,7 @@ ggplot(data = plot.df, aes(x = var_type_sml, y = cum_imp, fill = flow)) +
         axis.text.x = element_text(color = "black", angle = 35, hjust = 0.9, vjust = 1.01),
         panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed"))
 
-ggsave(paste0(PATH, "/10_GFOutput/2023_11_14/figures/alltax_cumulative_importance_allvars.png"), width = 16, height = 8)
+ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/alltax_cumulative_importance_allvars.png"), width = 16, height = 8)
 
 ##+ gage vs. type var models ----
 taxa.vect <- unique(ci$taxa)
@@ -223,7 +223,7 @@ for(sel.taxa in taxa.vect) {
           panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed")) +
     ggtitle(paste0(str_to_title(sel.taxa), ": all variables"))
   
-  ggsave(paste0(PATH, "/10_GFOutput/2023_11_14/figures/", sel.taxa, "_cumulative_importance_allvars.png"), plot = p2, width = 16, height = 9)
+  ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_cumulative_importance_allvars.png"), plot = p2, width = 16, height = 9)
   
 }
 
@@ -291,10 +291,10 @@ ci.cur <- ci.cur %>%
                                   grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
                                   T ~ "?"))
 
-write_csv(ci.cur, paste0(PATH, "/10_GFOutput/2023_11_14/results_tables/cumulative_importance_curve_combined.csv"))
+write_csv(ci.cur, paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_curve_combined.csv"))
 
 ##plot CI curve ----
-ci.cur <- read_csv(paste0(PATH, "/10_GFOutput/2023_11_14/results_tables/cumulative_importance_curve_combined.csv"))
+ci.cur <- read_csv(paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_curve_combined.csv"))
 
 taxa.vect <- unique(ci.cur$taxa)
 var.vect <- unique(ci.cur$var_grp)
@@ -354,7 +354,7 @@ for(sel.taxa in taxa.vect) {
           ggtitle(paste0(str_to_title(sel.taxa), ": ", v.group, " variables, all gage model"))
         # geom_point(data = max.cat, aes(x = 1, y = 0.020, color = flow))
         
-        ggsave(paste0(PATH, "/10_GFOutput/2023_11_14/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_allgagemods.png"), plot = p1, width = 9, height = 9)
+        ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_allgagemods.png"), plot = p1, width = 9, height = 9)
         
       } else {
         
@@ -368,7 +368,7 @@ for(sel.taxa in taxa.vect) {
           ci.cur.thm +
           ggtitle(paste0(str_to_title(sel.taxa), ": ", v.group, " variables, gage subset comparisons"))
         
-        ggsave(paste0(PATH, "/10_GFOutput/2023_11_14/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_gagecomp.png"), plot = p1, width = 15, height = 8)
+        ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_gagecomp.png"), plot = p1, width = 15, height = 8)
         
         }
       }

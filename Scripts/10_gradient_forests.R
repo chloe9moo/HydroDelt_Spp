@@ -9,17 +9,19 @@ PATH <- getwd()
 #read in data ----
 # fish <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/ARMOOK_Fishes_bysite23a_StreamCat_Flow_Full_15km.csv")) %>% select(-`...1`)
 # bug <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/BenthicInsect_23_StreamCat_Flow_Full_15km.csv"))
-fish <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/fish_bio_env_updated_20231110.csv"))
-bug <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/bug_bio_env_updated_20231110.csv"))
+fish <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/fish_orig_bio_env_updated_wide_20240212.csv"))
+bug <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/bug_orig_bio_env_updated_wide_20240212.csv"))
 
 all <- list(fish, bug) #combine for common manipulations
 
-all <- lapply(all, function(df){ #gets rid of duplicate columns, keeps 1
-  df <- df[!duplicated(t(df))]
-  return(df)
-})
+# all <- lapply(all, function(df){ #gets rid of duplicate columns, keeps 1
+#   df <- df[!duplicated(t(df))]
+#   return(df)
+# })
 
-spp_list <- read_csv(paste0(PATH, "/XX_archive/species_list_original.csv"))
+spp_list <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/tax_orig_occ_updatednames_20240212.csv")) %>%
+  mutate(col_new = gsub(" ", "_", col_new),
+         col_new = gsub("-", "", col_new))
 # rm(fish, bug)
 
 #get variable list ----
@@ -190,13 +192,13 @@ for(i in 1:length(all)) {
         
         cat("\nRunning", bio, ":", f, "flow,", ga, "gage,", var, "variable type...\n")
         # file.name <- paste0(PATH,  "/10_GFOutput/", gsub("-", "_", Sys.Date()), "/gf_", bio, "_", f, "_", ga, "gage_", var, ".rds")
-        file.name <- paste0(PATH,  "/10_GFOutput/2023_11_14/gf_", bio, "_", f, "_", ga, "gage_", var, ".rds") #forgot x y vars
+        file.name <- paste0(PATH,  "/10_GFOutput/", gsub("-", "_", Sys.Date()), "/gf_", bio, "_", f, "_", ga, "gage_", var, ".rds") #forgot x y vars
         if(file.exists(file.name)) { cat("Model exists, next.\n"); next }
         
         gf.out <- NULL
 
         gf.out <- gf_sub(full.data = all[[i]], #biological data + env data dataframe
-                         species.list = spp_list$species, #species of interest (in case less than the full dataframe)
+                         species.list = spp_list$col_new, #species of interest (in case less than the full dataframe)
                          env.variable.list = var.opt[[v]], #variables of interest; previously pulled out HIT, LULC, and full run
                          flow.type = f, #flow type to run, set as NA if all
                          gage.type = g #gage type to run, set as NA if all

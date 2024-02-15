@@ -123,3 +123,56 @@ ggplot() +
   theme_bw() + xlab("") + ylab("species threshold value")
 ggsave(paste0(PATH, "/99_figures/spp_thresh_boxplot_flowcomp.png"), bg = "white", width = 12, height = 5)
 
+rm(list = ls())
+
+#site diversity ----
+PATH <- getwd()
+source(paste0(PATH, "/Scripts/XX_colors.R"))
+
+file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
+occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
+                                                         long = col_number(),
+                                                         COMID = col_character(),
+                                                         gage_no_15yr = col_character(),
+                                                         dist2gage_m_15yr = col_number(),
+                                                         dist2strm_m_flw = col_number()))
+
+div_list <- read_csv(paste0(PATH, "/98_result_tables/site_div_alltax_alldiv_raw.csv"))
+
+#add COMID and flw type to diversity result
+xy_flw <- list()
+for(i in seq_along(occ.list)) {
+  if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  xy_flw[[i]] <- occ.list[[i]] %>% select(site_id, lat, long, COMID, flw_type) %>% mutate(taxa = taxa)
+}
+
+xy_flw <- bind_rows(xy_flw)
+
+div <- left_join(div_list, xy_flw)
+
+##boxplot of flow type x diversity estimate ----
+tmp <- div %>% 
+  pivot_longer(cols = matches("^(n_|f_)"), names_to = "div_type", values_to = "value") %>%
+  mutate(div_type = case_when(div_type == "n_sp" ~ "richness",
+                              div_type == "n_fsp" ~ "n. functionally unique spp",
+                              div_type == "f_eve" ~ "functional evenness",
+                              div_type == "f_disp" ~ "functional dispersion",
+                              T ~ NA)) %>%
+  filter(!is.na(div_type))
+
+ggplot() +
+  geom_boxplot(data = tmp, aes(x = flw_type, y = value, fill = flw_type), na.rm = T) +
+  # geom_jitter(data = tmp, aes(x = flw_type, y = value), alpha = 0.2, width = 0.3) +
+  facet_grid(div_type ~ taxa, scales = "free") +
+  scale_fill_manual(values = flow.pal) +
+  theme_bw() +
+  theme(axis.title = element_blank())
+ggsave(paste0(PATH, "/99_figures/site_div_alltax_boxplot_comp.png"), width = 5, height = 8)
+
+
+MAKE A MAP SHOWING SPATIAL PATTERNS OF DIVERSITY!!!!
+
+
+
+
+
