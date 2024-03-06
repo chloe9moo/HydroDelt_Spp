@@ -126,6 +126,7 @@ ggsave(paste0(PATH, "/99_figures/spp_thresh_boxplot_flowcomp.png"), bg = "white"
 rm(list = ls())
 
 #site diversity ----
+library(tidyverse); library(sf)
 PATH <- getwd()
 source(paste0(PATH, "/Scripts/XX_colors.R"))
 
@@ -170,9 +171,35 @@ ggplot() +
 ggsave(paste0(PATH, "/99_figures/site_div_alltax_boxplot_comp.png"), width = 5, height = 8)
 
 
-MAKE A MAP SHOWING SPATIAL PATTERNS OF DIVERSITY!!!!
+##map of site diversity ----
+#nhd load in
+# nhd <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/nhd_clip_state_eco.shp")) %>%
+#   mutate(COMID = as.character(COMID))
+# nhd <- left_join(nhd, div)
+div.sf <- st_as_sf(div, coords = c("long", "lat"), crs = 4269) 
 
+#armook 
+hlnd <- st_as_sf(maps::map("state", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>% #EPSG 4269 = NAD83
+  st_transform(., crs = 4269)
 
+p1 <- ggplot() +
+  geom_sf(data = hlnd, fill = "lightgrey", color = "black") +
+  geom_sf(data = div.sf %>% filter(taxa == "fish") %>% arrange(n_sp), 
+          aes(fill = n_sp), shape = 21, size = 2, alpha = 0.7) +
+  scale_fill_viridis_c(direction = -1) +
+  coord_sf(xlim = c(-98, -89)) +
+  theme(panel.border = element_rect(color = "black", fill = NA),
+        panel.background = element_blank())
+p2 <- ggplot() +
+  geom_sf(data = hlnd, fill = "lightgrey", color = "black") +
+  geom_sf(data = div.sf %>% filter(taxa == "fish") %>% arrange(f_disp), 
+          aes(fill = f_disp), shape = 21, size = 2, alpha = 0.7) +
+  scale_fill_viridis_c(direction = -1) +
+  coord_sf(xlim = c(-98, -89)) +
+  theme(panel.border = element_rect(color = "black", fill = NA),
+        panel.background = element_blank())
+ggpubr::ggarrange(p1, p2, nrow = 1)
 
+ggsave(paste0(PATH, "/99_figures/site_div_fish_map_comparison.png"), width = 10, height = 5)
 
 

@@ -358,7 +358,7 @@ g.info <- g.info %>%
   mutate(across(contains("dist2strm"), ~ round(.x, digits = 3)))
 write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 
-# get HDI ----
+# get HDI of gages ----
 g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 g.ii <- st_read(dsn = paste0(PATH, "/02_EnvDat/GAGES_II/point_shapefile"), layer = "gagesII_9322_sept30_2011") %>%
   select(STAID, DRAIN_SQKM) %>%
@@ -374,7 +374,10 @@ g.info <- g.info %>%
   select(-c(agency_cd, srs_id, access_cd, medium_grp_cd, parm_grp_cd, loc_web_ds)) 
 write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 
-## check + fix errors ----
+g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
+
+
+#check + fix errors ----
 #ignore quantile error and inflow/outflow skips
 #freq high throws the error, duration high also, potentially has to do with the all flow 0 values in 1990
 #timing low, timing high
@@ -385,7 +388,7 @@ write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 #             floodThreshold = fl.t
 #             )
 
-## compare to old HIT ----
+#compare to old HIT ----
 # old.hit <- read_csv(paste0(PATH, "/02_EnvDat/Updated_HIT_4.23.a.csv"),
 #                     col_types = cols(STAID_0 = col_character())) %>%
 #   select(-c(FID, STAID...2, STANAME, `Years in Op`, `Reference?`, `Start Date`, `End Date`, STAID...13), -contains("GAGESII"), -contains("Active"))

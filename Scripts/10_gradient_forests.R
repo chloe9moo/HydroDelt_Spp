@@ -1,110 +1,69 @@
-#GRADIENT FORESTS 
-
-#mostly updates
+### GRADIENT FORESTS ###
 
 library(tidyverse); library(gradientForest)
+options(readr.show_col_types = FALSE)
 
 PATH <- getwd()
 
 #read in data ----
-# fish <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/ARMOOK_Fishes_bysite23a_StreamCat_Flow_Full_15km.csv")) %>% select(-`...1`)
-# bug <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/BenthicInsect_23_StreamCat_Flow_Full_15km.csv"))
-fish <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/fish_orig_bio_env_updated_wide_20240212.csv"))
-bug <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/bug_orig_bio_env_updated_wide_20240212.csv"))
+#bio 
+# file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
+# occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
+#                                                          long = col_number(),
+#                                                          site_id = col_character(),
+#                                                          COMID = col_character(),
+#                                                          gage_no_15yr = col_character(),
+#                                                          dist2gage_m_15yr = col_number(),
+#                                                          dist2strm_m_flw = col_number()))
 
-all <- list(fish, bug) #combine for common manipulations
+#trait
+f <- list.files(paste0(PATH, "/20_Traits"), pattern = "site_x_trait", full.names = TRUE)
+site.list <- lapply(f, function(x) {
+  read_csv(x) %>%
+    rename_with(~ gsub("-", "_", .x))
+})
 
-# all <- lapply(all, function(df){ #gets rid of duplicate columns, keeps 1
-#   df <- df[!duplicated(t(df))]
-#   return(df)
-# })
-
-spp_list <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/tax_orig_occ_updatednames_20240212.csv")) %>%
-  mutate(col_new = gsub(" ", "_", col_new),
-         col_new = gsub("-", "", col_new))
-# rm(fish, bug)
+#env dat
+env.dat <- read_csv(paste0(PATH, "/02_EnvDat/env_dat_combined_allsites.csv")) %>%
+  rename(gage_lat = dec_lat_va, gage_long = dec_long_va) %>%
+  select(-huc_cd, -contains("date"), -contains("dist"), -hit_ttl_yrs, -flw_name,
+         -contains("mnth"), -contains("4.5"), -contains("ssn_max"), -contains("ssn_min"), -contains("ssn_med"))
 
 #get variable list ----
-vars <- list.files(paste0(PATH, "/10_GFOutput"), full.names = TRUE)
-vars <- vars[!file.info(vars)$isdir] #remove subdirectories
-vars <- lapply(vars, function(x){
-  tmp <- readRDS(x)
-  tmp <- names(tmp$X)
-  return(tmp)
-})
+vars.all <- names(env.dat)[!names(env.dat) %in% c("site_no", "COMID", "flw_type", "gage_class")]
 
-names(vars) <- gsub(".rds", "", list.files(paste0(PATH, "/10_GFOutput/"))[-1])
+vars.all <- data.frame(var = c(vars.all, "lat", "long"))
 
-vars.all <- data.frame(var_type = names(vars), var = I(vars), stringsAsFactors = FALSE) %>%
-  unnest(var)
-vars.notype <- vars.all %>%
-  mutate(var_type = gsub("gf\\.(bugs|fish)\\.23\\.(GW|GWlump|Int|RO)[._](full|HIT|LULC)(_cat)?", "\\3", var_type)) %>%
-  distinct() %>%
-  filter(var_type == "full") %>% 
-  filter(!grepl("[Cc]at", var))
+#add in group vars for separate runs
 vars.all <- vars.all %>%
-  mutate(var_type = gsub("gf\\.(bugs|fish)\\.23\\.(GW|GWlump|Int|RO)[._](full|HIT|LULC)(_cat)?", "\\3", var_type)) %>%
-  distinct() %>%
-  filter(var_type != "full") %>% 
-  filter(!(var_type == "LULC" & grepl("[Cc]at", var))) #going to do watershed vars only
-
-vars.all <- bind_rows(vars.all, 
-                      vars.notype %>% filter(!var %in% vars.all$var) )#add site_x and y back in
-
-##add in new variables ----
-#mcmanamay hydro alt vars
-hydro.alt <- names(bug)[grepl("pn", names(bug))]
-hydro.alt <- c(hydro.alt[grepl(paste0("pn", toupper(vars.all[vars.all$var_type == "HIT", ]$var), collapse = "|"), hydro.alt)], "pnHA_rank", "pnSeasonal")
-
-vars.all <- bind_rows(
-  vars.all,
-  data.frame(var_type = rep("H_ALT", length(hydro.alt)), var = hydro.alt)
-)
-
-#predicted stream temp
-strm.temp <- data.frame(var_type = rep("HIT", length(names(bug)[grepl("temp", names(bug))])), var = names(bug)[grepl("temp", names(bug))])
-strm.temp <- strm.temp %>%
-  filter(grepl("8.5", var)) %>% #since it's only historical, doesn't really matter because the two models are the same
-  filter(grepl("cv|ssn", var)) %>% #only doing seasonal avgs
-  filter(grepl("mn|cv", var))
-
-vars.all <- bind_rows(vars.all, strm.temp)
-
-rm(hydro.alt, strm.temp, vars)
-  
-#get ref type + attach to datasets (also attached updated env vars) ----
-hit <- read_csv(paste0(PATH, "/02_EnvDat/Updated_HIT_4.23.a.csv"))
-hit <- hit[!duplicated(t(hit))]
-hit <- hit %>% mutate(type = ifelse(GAGESII_HDI.HYDRO_DISTURB_INDX > 13, "non-ref", "ref"))
-
-all <- lapply(all, function(x){
-  x <- x %>%
-    select(-any_of(colnames(hit))) %>% #replace updated vars
-    left_join(., hit, by = c("STAID" = "STAID_0"))
-  return(x)
-})
-
-length(unique(c(all[[1]]$STAID, all[[2]]$STAID))) #number of gages used in data
+  mutate(fine_cat = case_when(grepl("pn|HDI", var) ~ "hydro_alt",
+                              grepl("mnth|ssn|ann", var) ~ "stream_temp", 
+                              grepl("lat|long|drain", var) ~ "spatial",
+                              grepl("amplitude|ar|dh|dl|fh|fl|lam|ma|mh|ml|phase|ra|ta|th|tl", var) ~ "HIT"),
+         course_cat = case_when(grepl("hydro_alt|stream_temp|HIT", fine_cat) ~ "hydrology",
+                                grepl("spatial", fine_cat) ~ "spatial"), 
+         run = case_when(var %in% vars[[1]] ~ TRUE, 
+                         var %in% c("lat", "long", "pnSeasonal") ~ TRUE,
+                         var %in% paste0("pn", str_to_upper(vars[[1]])) ~ TRUE,
+                         T ~ FALSE)) #THIS IS FROM 10_GRADIENT_FORESTS_ORIGDAT.R!!!!!!!
 
 #get gage types within each flow type
-n <- bind_rows(all[[1]] %>% select(STAID, type, Flow_type), all[[2]] %>% select(STAID, type, Flow_type)) %>% distinct()
-n2 <- n %>% select(STAID, type) %>% distinct()
-table(n$Flow_type, n$type)
+table(env.dat$gage_class, env.dat$flw_type)
 
 #run GF models ----
 #make function for repeated runs
-gf_sub <- function(full.data = all[[1]], #biological data + env data dataframe
-                   species.list = spp_list$species, #species of interest (in case less than the full dataframe)
+gf_sub <- function(full.data, #biological data + env data dataframe
+                   species.list, #species of interest (in case less than the full dataframe)
                    env.variable.list = vars.all, #variables of interest; previously pulled out HIT, LULC, and full run
-                   flow.type = "Int", #flow type to run, set as NA if all
-                   gage.type = "ref", #gage type to run, set as NA if all
+                   flow.type = NA, #flow type to run, set as NA if all
+                   gage.type = NA, #gage type to run, set as NA if all
                    gf.classification = TRUE, #classification or regression? likely don't change ever for our purposes
                    #gradientForest options:
                    ntree = 999,
                    transform = NULL,
                    compact = TRUE,
                    trace = TRUE,  
-                   nbin=201,
+                   nbin = 201,
                    corr.threshold = 0.5) {
   
   ##remove sites with < 5 spp ----
@@ -116,7 +75,7 @@ gf_sub <- function(full.data = all[[1]], #biological data + env data dataframe
   ##subset by flow + reference ----
   #flow
   if(!any(grepl(flow.type, c("Int", "RO", "GW"), ignore.case = TRUE) | is.na(flow.type))) { stop("flow type not recognized.") }
-  if(!is.na(flow.type)) { full.data <- full.data[grepl(flow.type, full.data$Flow_type, ignore.case = TRUE), ] }
+  if(!is.na(flow.type)) { full.data <- full.data[grepl(flow.type, full.data$flw_type, ignore.case = TRUE), ] }
   
   #reference
   if(!any(grepl(gage.type, c("ref", "non-ref"), ignore.case = TRUE) | is.na(gage.type))) { stop("gage type not recognized.") }
@@ -139,6 +98,8 @@ gf_sub <- function(full.data = all[[1]], #biological data + env data dataframe
   spp_col <- spp_col[, colSums(spp_col) >= 10]
   # ##- remove species w/ < 5% of max collection records?? ##not sure they did this in the end...
   # spp_col <- spp_col[, colSums(spp_col) >= max(colSums(spp_col))*0.05]
+  ##- remove species present at every site
+  spp_col <- spp_col[, colSums(spp_col) != nrow(spp_col)]
   
   ##set model parameters ----
   n.sites <- nrow(spp_col)
@@ -162,6 +123,51 @@ gf_sub <- function(full.data = all[[1]], #biological data + env data dataframe
   return(gf.out)
 }
 
+#testing ----
+dir.create(paste0(PATH, "/10_GFOutput/", gsub("-", "_", Sys.Date())))
+#bug tests
+comb.dat <- left_join(site.list[[1]], env.dat %>% select(-flw_type, -COMID), by = c("gage_no_15yr" = "site_no"))
+
+test <- gf_sub(full.data = comb.dat,
+               species.list = names(site.list[[1]] %>% select(-c(lat, long, COMID, contains("flw"), site_id, contains("gage")))),
+               env.variable.list = vars.all[vars.all$run == TRUE, ]$var)
+saveRDS(test, paste0(PATH, "/10_GFOutput/2024_02_21/gf_bug_traits_allflw_allgage_all.rds"))
+
+#break out flows
+flow.opt <- c("Int", "RO", "GW")
+
+for(i in seq_along(site.list)) {
+  
+  if(i == 2) { bio <- "fish"} else { bio <- "bugs" } #set taxa
+  
+  comb.dat <- left_join(site.list[[i]], env.dat %>% select(-flw_type, -COMID), by = c("gage_no_15yr" = "site_no"))
+  spp <- names(site.list[[i]] %>% select(-c(lat, long, COMID, contains("flw"), site_id, contains("gage"))))
+  
+  for(f in flow.opt) {
+    
+    cat("\nRunning", bio, ":", f, "flow...\n")
+   
+    file.name <- paste0(PATH,  "/10_GFOutput/", gsub("-", "_", Sys.Date()), "/gf_", bio, "_traits_", f, "_all.rds")
+    if(file.exists(file.name)) { cat("Model exists, next.\n"); next }
+    
+    gf.out <- NULL
+    
+    gf.out <- gf_sub(full.data = comb.dat, #biological data + env data dataframe
+                     species.list = spp, #species of interest (in case less than the full dataframe)
+                     env.variable.list = vars.all[vars.all$run == TRUE, ]$var, #variables of interest; previously pulled out HIT, LULC, and full run
+                     flow.type = f, #flow type to run, set as NA if all
+                     gage.type = NA #gage type to run, set as NA if all
+    )
+    
+    saveRDS(gf.out, file = file.name) #saving bc it would be massive to store all of them in memory
+    
+    Sys.sleep(1)
+    
+  }
+}
+
+
+#run several groups of models at once: ----
 #models to run: 
 #fish + bug (2)
 # all[[1]], all[[2]]

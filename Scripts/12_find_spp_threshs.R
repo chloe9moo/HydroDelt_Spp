@@ -9,10 +9,11 @@ library(parallel) #<<multimodel runs
 PATH <- getwd()
 
 #which model(s) to analyze? (what is the name of the file)
+dir.date <- "2024_02_12"
 # file.name <- paste0(PATH, "/10_GFOutput/gf.bugs.23.GW_full_cat.rds")  #single model run
-file.list <- list.files(paste0(PATH, "/10_GFOutput"), pattern = "gf.", full.names = T)
+file.list <- list.files(paste0(PATH, "/10_GFOutput/", dir.date), pattern = "gf_", full.names = T)
 #how many variables (ordered by importance) to threshold?
-num.vars <- 10
+num.vars <- 116
 #what is the allowable slope cut off for consolidating thresholds - ie, percent of targeted slope?
 prx.val <- 0.60 #<< could be part of the threshold if its at least 60% of the highest slope value
 #what is the allowable slope cut off for alternative thresholds besides highest slope?
@@ -154,8 +155,12 @@ for (i in 1:length(iVars)) { #for every important variable ...
 
 CU_all <- bind_rows(CU)
 
-write_csv(CU_all, paste0(PATH, "/11_Thresholds/full_thresh_", 
-                         gsub(".rds", "", gsub(paste0(PATH, "/10_GFOutput/"), "", file.name)), #matching name to GF model names
+if(!dir.exists(paste0(PATH, "/11_Thresholds/", dir.date))) { #check for write directory existance
+  dir.create(paste0(PATH, "/11_Thresholds/", dir.date))
+}
+
+write_csv(CU_all, paste0(PATH, "/11_Thresholds/", dir.date, "/full_thresh_", 
+                         gsub(".rds", "", gsub(paste0(PATH, "/10_GFOutput/", dir.date, "/"), "", file.name)), #matching name to GF model names
                          ".csv"))
 
 }) #end parallel
@@ -164,22 +169,24 @@ write_csv(CU_all, paste0(PATH, "/11_Thresholds/full_thresh_",
 library(ggpubr)
 source(paste0(PATH, "/Scripts/XX_find_thresh_func.R"))
 ##need to adjust to plot larger env gradients (e.g., WS Area)
-CU_all <- read_csv(paste0(PATH, "/11_Thresholds/full_thresh_gf.fish.23.GWlump.full.csv"))
-gf.mod <- readRDS(file.list[[10]])
-full.in <- cbind(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
+f <- file.list[[37]]
+gf.mod <- readRDS(f)
+CU_all <- read_csv(paste0(PATH, "/11_Thresholds/", dir.date, "/full_thresh_",
+                          gsub(".rds", "", gsub(paste0(PATH, "/10_GFOutput/", dir.date, "/"), "", f)), ".csv"))
+full.in <- bind_cols(gf.mod$Y, gf.mod$X) #pull out full predictor + response data and combine (for later)
 spp_imp <- as.data.frame(importance(gf.mod, type = "Species")) %>% rownames_to_column("species")
+names(spp_imp)[2] <- "rel_err"
+iVars <- names(importance(gf.mod))[1:num.vars] #pull out variables of interest
 
-check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Etheostoma.radiosum", pred_var = "TmeanWs")
+dir.create(paste0(PATH, "/11_Thresholds/", dir.date, "/plots"))
+
+check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = "Etheostoma_radiosum", pred_var = "TmeanWs")
 
 #save top spp plots
 top_spp <- as.list((spp_imp %>% arrange(desc(rel_err)))[1:5, "species"])
 lapply(top_spp, function(x) {
   for (var in iVars) {
     check_threshold(thresh_df = CU_all, pa_df = full.in, spp_name = x, pred_var = var, plot_it = F,
-                    save_location = paste0(PATH, "/11_Thresholds/Plots"))
+                    save_location = paste0(PATH, "/11_Thresholds/", dir.date, "/plots"))
   }
 })
-
-
-
-

@@ -8,30 +8,7 @@ PATH <- getwd()
 t.cols <- read_csv(paste0(PATH, "/20_Traits/trait_column_selection.csv")) %>%
   filter(!is.na(database_col_name) & database_col_name != "--")
 
-find_cat_mode <- function(x) { #for finding most common categorical in na replacement
-  ux <- unique(x)
-  ux[which.max(tabulate(match(x, ux)))]
-}
-
-replace_na_traits <- function(data, group_var, cat_vars) {
-  data %>%
-    { if (!is.na(group_var)) group_by(., !!sym(group_var)) else . } %>%
-    mutate(across(c(where(is.numeric), -matches("record_ttl_15kbuff")), 
-                  ~ ifelse(is.na(.x), mean(.x, na.rm = TRUE), .x))) %>%
-    mutate(across(matches(paste0(cat_vars, collapse = "|")), 
-                  ~ ifelse(is.na(.x), find_cat_mode(.x[!is.na(.x)]), .x))) %>%
-    ungroup()
-}
-
-compress_traits <- function(data, group_var, cat_vars) {
-  data %>%
-    { if (!is.na(group_var)) group_by(., !!sym(group_var)) else . } %>%
-    summarise(across(c(where(is.numeric), -matches("record_ttl_15kbuff")), 
-                  ~ mean(.x, na.rm = TRUE)),
-              across(matches(paste0(cat_vars, collapse = "|")), 
-                     ~ find_cat_mode(.x[!is.na(.x)]))) %>%
-    ungroup()
-}
+source(paste0(PATH, "/Scripts/XX_trait_functions.R"))
 
 #FISH ----
 f.spp <- read_csv(paste0(PATH, "/01_BioDat/fish_species_list.csv"))
@@ -252,6 +229,14 @@ write_csv(fish.sum, paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
 
 rm(f1, f2, f3, tmp, tmp1, f.cols2, c.key)
 
+##pair to species list ----
+fish.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
+fish <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv")) %>% select(order, family, genus, species) %>% distinct()
+
+fish.traits <- left_join(fish, fish.sum)
+
+write_csv(fish.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
+
 ##identify missing traits ----
 fish.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
 
@@ -270,29 +255,175 @@ na.check <- f.spp %>%
 
 write_csv(na.check, paste0(PATH, "/20_Traits/trait_dat_fish_miss_dat_list_20240109.csv"))
 
-##pair to species list + fill in missing data ----
+rm(list = ls())
+
+##bring in missing traits from lit search ----
+PATH <- getwd()
+
+source(paste0(PATH, "/Scripts/XX_trait_functions.R"))
+
 fish.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
-fish <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv")) %>% select(order, family, genus, species) %>% distinct()
 
-fish.traits <- left_join(fish, fish.sum)
+new.t <- read_csv(paste0(PATH, "/20_Traits/trait_dat_fish_miss_dat_list_updated.csv"))
+new.t <- new.t[, 1:3] #get rid of information columns
 
-###fill in missing traits via mean of higher tax. lvls ----
-cats <- names(fish.traits)[sapply(fish.traits, is.character)]
-cats <- cats[!cats %in% c("order", "family", "genus", "species")]
+new.t <- new.t %>%
+  separate_longer_delim(., value, ";") %>% 
+  mutate(value = gsub(" ", "", value)) %>% 
+  filter(!is.na(value)) %>%
+  mutate(trait = case_when(grepl("sp.season|sp.type", trait) ~ paste0("spawn_", value),
+                           grepl("hab.", trait) ~ paste0("hab_", value),
+                           grepl("troph", trait) ~ paste0("troph_", value),
+                           T ~ trait)) %>%
+  pivot_wider(., names_from = trait, values_from = value) %>%
+  mutate(across(c(contains("troph"), contains("hab"), matches("spring|summer|winter|fall"), matches("_ng_|_g_|offshore")), 
+                ~ ifelse(!is.na(.x), 1, NA)),
+         across(-c(species, spawn_freq, temp_pref, col_pos), as.numeric))
+
+tmp <- bind_rows(fish.sum[, !names(fish.sum) %in% "genus"], new.t)
+
+#compress down to one row per species
+tmp <- tmp %>%
+  mutate(across(c(spawn_freq, temp_pref, col_pos), ~ str_to_lower(.x))) %>%
+  group_by(species) %>%
+  summarise(across(.cols = c(fecundity, longevity, matur_age, spawn_length, egg_size, max_tl),
+                   ~ median(.x, na.rm = TRUE)),
+            across(.cols = c(contains("hab_"), contains("spawn_"), contains("troph_"), -spawn_length, -spawn_freq),
+                   ~ ifelse(all(is.na(.x)), NA, sum(.x, na.rm = TRUE))),
+            across(.cols = c(spawn_freq, temp_pref, col_pos),
+                   ~ find_cat_mode(.x)))
+
+#adjust for binary vars in setting actual NAs for later replacement
+#essentially, if all values in a category are NA, we can assume we didn't find that variable
+tmp <- tmp %>%
+  rowwise() %>%
+  mutate(across(matches("fast|mod|slow"), ~ ifelse(all(is.na(c_across(matches("fast|mod|slow")))),
+                                                   NA, replace_na(.x, 0))),
+         across(c(contains("hab_"), -matches("fast|mod|slow")), ~ ifelse(all(is.na(c_across(c(contains("hab_"), -matches("fast|mod|slow"))))),
+                                                                         NA, replace_na(.x, 0))),
+         across(matches("winter|spring|summer|fall"), ~ ifelse(all(is.na(c_across(matches("winter|spring|summer|fall")))),
+                                                               NA, replace_na(.x, 0))),
+         across(contains("troph_"), ~ ifelse(all(is.na(c_across(contains("troph_")))),
+                                            NA, replace_na(.x, 0))),
+         across(matches("g_ns|g_sc|indiff|ng_bh|ng_os|offshore"), ~ ifelse(all(is.na(c_across(matches("g_ns|g_sc|indiff|ng_bh|ng_os|offshore")))),
+                                                                           NA, replace_na(.x, 0))))
+
+#pair to spp names
+fish <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_15k_wide_20240214.csv"))
+f.spp <- read_csv(paste0(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv"))) %>% select(order, family, genus, species) %>% distinct()
+f.spp <- f.spp[f.spp$species %in% gsub("_", " ", names(fish)), ]
+
+fish.traits <- left_join(f.spp, tmp)
+
+write_csv(fish.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish_with_updates.csv"))
+
+#summarize amount of missing data
+sapply(fish.traits, function(x) round(sum(is.na(x)) / length(x) * 100, digits = 2))
+
+rm(list = ls()) #clean workspace
+
+##fill in missing traits via RF ----
+library(missForest); library(tidyverse)
+
+PATH <- getwd()
+
+fish.traits <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish_with_updates.csv"))
+
+tmp <- data.frame()
+#get binary traits
+bi.vars <- sapply(fish.traits, function(x) {
+  if(is.character(x) | is.factor(x)) {
+    # tmp <- bind_cols(tmp, x)
+    return(FALSE)
+  } else {
+    if(max(x, na.rm = TRUE) == 1 & min(x, na.rm = TRUE) == 0) {
+      return(TRUE)
+    } else {
+      return(FALSE)
+    }
+  }
+})
+bi.vars <- names(bi.vars[bi.vars == TRUE])
 
 fish.traits <- fish.traits %>%
-  #fill in across increasingly higher levels
-  replace_na_traits(., "genus", cats) %>%
-  replace_na_traits(., "family", cats) %>%
-  replace_na_traits(., "order", cats) %>%
-  replace_na_traits(., NA, cats)
-  
-#update binary vars so that it's either 0 or 1 (by rounding)
-fish.traits <- fish.traits %>%
-  mutate(across(matches(paste0(t.cols[t.cols$taxa == "fish" & t.cols$trait_type == "binary",]$trait_name, collapse = "|")),
-                ~ round(.x, digits = 0)))
+  mutate(across(c(order, family, temp_pref, col_pos, spawn_freq, matches(bi.vars)), as.factor))
 
-write_csv(fish.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish_na_removed.csv"))
+tmp <- as.data.frame(fish.traits[,-c(1,3,4)])
+
+#if xtfrm error appears, need to restart R and try again
+fish.imp <- missForest(tmp, #including family, as taxonomic relationship vars for improved prediction
+                       ntree = 1000, #set to 1000 for full run
+                       variablewise = TRUE,
+                       verbose = TRUE) #return individual var performance or not
+
+imp.traits <- bind_cols(fish.traits[,c(1,3,4)], fish.imp$ximp)
+
+write_csv(imp.traits %>% relocate(order, family, genus, species), paste0(PATH, "/20_Traits/trait_dat_summ_fish_imputed.csv"))
+
+imp.tr.error <- data.frame(trait = names(fish.imp$ximp), 
+                           error_type = names(fish.imp$OOBerror), 
+                           error_val = fish.imp$OOBerror)
+
+imp.tr.error <- imp.tr.error %>%
+  mutate(adj_error = case_when(error_type == "MSE" ~ sqrt(error_val), #RMSE
+                               error_type == "PFC" ~ 1 - error_val)) #Proportion true classification
+
+write_csv(imp.tr.error, paste0(PATH, "/20_Traits/impute_trait_error_rates_fish.csv"))
+
+#plot traits
+gg.traits <- fish.traits[,-c(1:4)] %>% 
+  select(where(is.numeric)) %>% 
+  pivot_longer(cols = everything()) %>%
+  filter(!is.na(value))
+gg.new <- imp.traits %>% 
+  select(where(is.numeric)) %>% 
+  pivot_longer(cols = everything()) %>%
+  filter(!is.na(value))
+gg.tr.mean <- gg.traits %>%
+  group_by(name) %>%
+  summarise(mean = mean(value)) %>%
+  left_join(., 
+            imp.tr.error[imp.tr.error$error_type == "MSE",] %>% rename(name = trait)
+            ) %>%
+  mutate(upper = mean + adj_error,
+         lower = mean - adj_error)
+
+ggplot() +
+  geom_violin(data = gg.traits, aes(x = 1, y = value, fill = name)) +
+  geom_point(data = gg.tr.mean, aes(x = 1, y = mean), size = 3, pch = 15) +
+  geom_errorbar(data = gg.tr.mean, aes(x = 1, ymax = upper, ymin = lower), width = 0.25) +
+  facet_wrap(~ name, scales = "free_y") +
+  theme_classic() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+
+ggplot() +
+  geom_density(data = gg.traits, aes(x = value)) +
+  geom_density(data = gg.new, aes(x = value)) +
+  facet_wrap(~ name, scales = "free") +
+  theme_classic() +
+  theme(axis.title.x = element_blank())
+
+rm(list = ls())
+
+#fill in missing traits via mean of higher tax. lvls ---
+# cats <- names(fish.traits)[sapply(fish.traits, is.character)]
+# cats <- cats[!cats %in% c("order", "family", "genus", "species")]
+# 
+# fish.traits <- fish.traits %>%
+#   #fill in across increasingly higher levels
+#   replace_na_traits(., "genus", cats) %>%
+#   replace_na_traits(., "family", cats) %>%
+#   replace_na_traits(., "order", cats) %>%
+#   replace_na_traits(., NA, cats)
+#   
+# #update binary vars so that it's either 0 or 1 (by rounding)
+# fish.traits <- fish.traits %>%
+#   mutate(across(matches(paste0(t.cols[t.cols$taxa == "fish" & t.cols$trait_type == "binary",]$trait_name, collapse = "|")),
+#                 ~ round(.x, digits = 0)))
+# 
+# write_csv(fish.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish_na_removed.csv"))
 
 #INVERT ----
 i.spp <- read_csv(paste0(PATH, "/01_BioDat/bug_species_list.csv"))
@@ -532,6 +663,34 @@ bug.traits <- bug.traits %>%
                 ~ round(.x, digits = 0)))
 
 write_csv(bug.traits, paste0(PATH, "/20_Traits/trait_dat_summ_bug_na_removed.csv"))
+
+rm(list = ls())
+
+#ALL TAXA ----
+PATH <- getwd()
+source(paste0(PATH, "/Scripts/XX_trait_functions.R"))
+#NOTE!! NEED TO UPDATE FUNCTION TO HANDLE CONTINUOUS TRAITS IF NOT CONVERTING TO CAT!!!!
+
+#sites
+file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
+occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
+                                                         long = col_number(),
+                                                         site_id = col_character(),
+                                                         COMID = col_character(),
+                                                         gage_no_15yr = col_character(),
+                                                         dist2gage_m_15yr = col_number(),
+                                                         dist2strm_m_flw = col_number()))
+occ.list <- list(occ.list[[2]]) #for now, without imputed bug data
+
+#wide traits load in
+file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "trait_dat_summ_(fish|bug)_imputed", full.names = TRUE)
+traits <- lapply(file.list, read_csv)
+
+## site by trait matrices ----
+fish <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:3)])
+
+write_csv(fish[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence.csv"))
+write_csv(fish[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance.csv"))
 
 # summarize + plot ----
 library(vegan); library(ape)

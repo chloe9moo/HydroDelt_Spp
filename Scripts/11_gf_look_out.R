@@ -6,12 +6,13 @@ options(readr.show_col_types = FALSE)
 
 PATH <- getwd()
 
-gf.list <- list.files(paste0(PATH, "/10_GFOutput/2024_02_12"), ".rds", full.names = TRUE)
+dir.date <- "2024_02_21"
+gf.list <- list.files(paste0(PATH, "/10_GFOutput/", dir.date), ".rds", full.names = TRUE)
 
 #set colors for consistency ----
 source(paste0(PATH, "/Scripts/XX_colors.R"))
 
-gf_file <- gf.list[[1]] #testing
+# gf_file <- gf.list[[1]] #testing
 
 # variable importance (weighted R2) ----
 v.imp <- lapply(gf.list, function(gf_file) { #get raw weighted R2 data
@@ -43,10 +44,12 @@ v.imp <- lapply(gf.list, function(gf_file) { #get raw weighted R2 data
 
 v.imp <- bind_rows(v.imp)
 
-write_csv(v.imp, paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/variable_importance_R2_combined.csv"))
+# v.imp <- v.imp %>% mutate(gage = "all", flow = case_when(is.na(flow) ~ "all", T ~ flow)) #only for some runs!
+
+write_csv(v.imp, paste0(PATH, "/10_GFOutput/", dir.date, "/results_tables/variable_importance_R2_combined.csv"))
 
 ##plot VI (weighted R2) ----
-v.imp <- read_csv(paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/variable_importance_R2_combined.csv"))
+v.imp <- read_csv(paste0(PATH, "/10_GFOutput/", dir.date, "/results_tables/variable_importance_R2_combined.csv"))
 
 #get variable types for colors
 v.imp <- v.imp %>% 
@@ -57,16 +60,22 @@ v.imp <- v.imp %>%
               rename(var_type_lrg = var_grp) %>%
               distinct()
             ) %>%
-  mutate(var_type_sml = case_when(var_type_lrg == "HIT" ~ "hydrology",
-                                  grepl("BFIWs", env_var) ~ "hydrology",
-                                  grepl("ssn|cv", env_var) ~ "stream temp",
-                                  grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
-                                  grepl("pn", env_var) ~ "hydrologic alteration",
-                                  grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
-                                  grepl("Elev|Area|site_", env_var) ~ "spatial",
-                                  grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
-                                  grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
-                                  T ~ "?"))
+  mutate(var_type_sml = case_when(grepl("pn|HDI", env_var) ~ "hydro_alt",
+                                  grepl("mnth|ssn|ann", env_var) ~ "stream_temp", 
+                                  grepl("lat|long|drain", env_var) ~ "spatial",
+                                  grepl("amplitude|ar|dh|dl|fh|fl|lam|ma|mh|ml|phase|ra|ta|th|tl", env_var) ~ "HIT"),
+         var_type_lrg = case_when(grepl("hydro_alt|stream_temp|HIT", var_type_sml) ~ "hydrology",
+                                  grepl("spatial", var_type_sml) ~ "spatial"))
+  # mutate(var_type_sml = case_when(var_type_lrg == "HIT" ~ "hydrology",
+  #                                 grepl("BFIWs", env_var) ~ "hydrology",
+  #                                 grepl("ssn|cv", env_var) ~ "stream temp",
+  #                                 grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
+  #                                 grepl("pn", env_var) ~ "hydrologic alteration",
+  #                                 grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
+  #                                 grepl("Elev|Area|site_|lat|long", env_var) ~ "spatial",
+  #                                 grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
+  #                                 grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
+  #                                 T ~ "?"))
 
 taxa.vect <- unique(v.imp$taxa)
 var.vect <- unique(v.imp$var_grp)
@@ -95,7 +104,7 @@ for(sel.taxa in taxa.vect) {
       scale_fill_manual(values = c.pal, name = "Variable Type") +
       theme_bw() + ggtitle(paste0(str_to_title(sel.taxa), ": ", v.group, " variables")) + ylab("")
     
-    ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_variable_importance_", v.group, "vars.png"), plot = p1, width = 8, height = 9)
+    ggsave(paste0(PATH, "/10_GFOutput/", dir.date, "/figures/", sel.taxa, "_variable_importance_", v.group, "vars.png"), plot = p1, width = 8, height = 9)
     
   }
 }
@@ -139,6 +148,7 @@ ci <- lapply(gf.list, function(gf_file) { #get raw CI data for all models
 })
 
 ci <- bind_rows(ci)
+# ci <- ci %>% mutate(gage = "all", flow = case_when(is.na(flow) ~ "all", T ~ flow)) #only for some gf runs!
 
 #get variable types for grouping
 ci <- ci %>% 
@@ -149,21 +159,27 @@ ci <- ci %>%
               rename(var_type_lrg = var_grp) %>%
               distinct()
   ) %>%
-  mutate(var_type_sml = case_when(var_type_lrg == "HIT" ~ "hydrology",
-                                  grepl("BFIWs", env_var) ~ "hydrology",
-                                  grepl("ssn|cv", env_var) ~ "stream temp",
-                                  grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
-                                  grepl("pn", env_var) ~ "hydrologic alteration",
-                                  grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
-                                  grepl("Elev|Area|site_", env_var) ~ "spatial",
-                                  grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
-                                  grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
-                                  T ~ "?"))
+  mutate(var_type_sml = case_when(grepl("pn|HDI", env_var) ~ "hydro_alt",
+                                  grepl("mnth|ssn|ann", env_var) ~ "stream_temp", 
+                                  grepl("lat|long|drain", env_var) ~ "spatial",
+                                  grepl("amplitude|ar|dh|dl|fh|fl|lam|ma|mh|ml|phase|ra|ta|th|tl", env_var) ~ "HIT"),
+         var_type_lrg = case_when(grepl("hydro_alt|stream_temp|HIT", var_type_sml) ~ "hydrology",
+                                  grepl("spatial", var_type_sml) ~ "spatial"))
+  # mutate(var_type_sml = case_when(var_type_lrg == "HIT" ~ "hydrology",
+  #                                 grepl("BFIWs", env_var) ~ "hydrology",
+  #                                 grepl("ssn|cv", env_var) ~ "stream temp",
+  #                                 grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
+  #                                 grepl("pn", env_var) ~ "hydrologic alteration",
+  #                                 grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
+  #                                 grepl("Elev|Area|site_", env_var) ~ "spatial",
+  #                                 grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
+  #                                 grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
+  #                                 T ~ "?"))
 
-write_csv(ci, paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_combined.csv"))
+write_csv(ci, paste0(PATH, "/10_GFOutput/", dir.date, "/results_tables/cumulative_importance_combined.csv"))
 
 ##plot CI ----
-ci <- read_csv(paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_combined.csv"))
+ci <- read_csv(paste0(PATH, "/10_GFOutput/", dir.date, "/results_tables/cumulative_importance_combined.csv"))
 
 ##+ all taxa, all var models ----
 plot.df <- ci %>%
@@ -191,7 +207,7 @@ ggplot(data = plot.df, aes(x = var_type_sml, y = cum_imp, fill = flow)) +
         axis.text.x = element_text(color = "black", angle = 35, hjust = 0.9, vjust = 1.01),
         panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed"))
 
-ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/alltax_cumulative_importance_allvars.png"), width = 16, height = 8)
+ggsave(paste0(PATH, "/10_GFOutput/", dir.date, "/figures/alltax_cumulative_importance_allvars.png"), width = 16, height = 8)
 
 ##+ gage vs. type var models ----
 taxa.vect <- unique(ci$taxa)
@@ -223,7 +239,7 @@ for(sel.taxa in taxa.vect) {
           panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed")) +
     ggtitle(paste0(str_to_title(sel.taxa), ": all variables"))
   
-  ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_cumulative_importance_allvars.png"), plot = p2, width = 16, height = 9)
+  ggsave(paste0(PATH, "/10_GFOutput/", dir.date, "/figures/", sel.taxa, "_cumulative_importance_allvars.png"), plot = p2, width = 16, height = 9)
   
 }
 
@@ -271,6 +287,8 @@ ci.cur <- lapply(gf.list, function(gf_file) { #get raw CI data for all models
 
 ci.cur <- bind_rows(ci.cur)
 
+# ci.cur <- ci.cur %>% mutate(gage = "all", flow = case_when(is.na(flow) ~ "all", T ~ flow))
+
 #get variable types for grouping
 ci.cur <- ci.cur %>% 
   left_join(., 
@@ -280,21 +298,27 @@ ci.cur <- ci.cur %>%
               rename(var_type_lrg = var_grp) %>%
               distinct()
   ) %>%
-  mutate(var_type_sml = case_when(var_type_lrg == "HIT" ~ "hydrology",
-                                  grepl("BFIWs", env_var) ~ "hydrology",
-                                  grepl("ssn|cv", env_var) ~ "stream temp",
-                                  grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
-                                  grepl("pn", env_var) ~ "hydrologic alteration",
-                                  grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
-                                  grepl("Elev|Area|site_", env_var) ~ "spatial",
-                                  grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
-                                  grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
-                                  T ~ "?"))
+  mutate(var_type_sml = case_when(grepl("pn|HDI", env_var) ~ "hydro_alt",
+                                  grepl("mnth|ssn|ann", env_var) ~ "stream_temp", 
+                                  grepl("lat|long|drain", env_var) ~ "spatial",
+                                  grepl("amplitude|ar|dh|dl|fh|fl|lam|ma|mh|ml|phase|ra|ta|th|tl", env_var) ~ "HIT"),
+         var_type_lrg = case_when(grepl("hydro_alt|stream_temp|HIT", var_type_sml) ~ "hydrology",
+                                  grepl("spatial", var_type_sml) ~ "spatial"))
+  # mutate(var_type_sml = case_when(var_type_lrg == "HIT" ~ "hydrology",
+  #                                 grepl("BFIWs", env_var) ~ "hydrology",
+  #                                 grepl("ssn|cv", env_var) ~ "stream temp",
+  #                                 grepl("TmaxWs|TminWs|TmeanWs|PrecipWs", env_var) ~ "climate",
+  #                                 grepl("pn", env_var) ~ "hydrologic alteration",
+  #                                 grepl("Dam|Rd|Pct|NABD|NWs", env_var) ~ "land use",
+  #                                 grepl("Elev|Area|site_", env_var) ~ "spatial",
+  #                                 grepl("Clay|Sand|Om|Perm|WtDep", env_var) ~ "soil",
+  #                                 grepl("Rck|HydrlCond|P2O5|K2O|Kffact", env_var) ~ "geology/lithology",
+  #                                 T ~ "?"))
 
-write_csv(ci.cur, paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_curve_combined.csv"))
+write_csv(ci.cur, paste0(PATH, "/10_GFOutput/", dir.date, "/results_tables/cumulative_importance_curve_combined.csv"))
 
 ##plot CI curve ----
-ci.cur <- read_csv(paste0(PATH, "/10_GFOutput/2024_02_12/results_tables/cumulative_importance_curve_combined.csv"))
+ci.cur <- read_csv(paste0(PATH, "/10_GFOutput/", dir.date, "/results_tables/cumulative_importance_curve_combined.csv"))
 
 taxa.vect <- unique(ci.cur$taxa)
 var.vect <- unique(ci.cur$var_grp)
@@ -354,7 +378,7 @@ for(sel.taxa in taxa.vect) {
           ggtitle(paste0(str_to_title(sel.taxa), ": ", v.group, " variables, all gage model"))
         # geom_point(data = max.cat, aes(x = 1, y = 0.020, color = flow))
         
-        ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_allgagemods.png"), plot = p1, width = 9, height = 9)
+        ggsave(paste0(PATH, "/10_GFOutput/", dir.date, "/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_allgagemods.png"), plot = p1, width = 9, height = 9)
         
       } else {
         
@@ -368,7 +392,7 @@ for(sel.taxa in taxa.vect) {
           ci.cur.thm +
           ggtitle(paste0(str_to_title(sel.taxa), ": ", v.group, " variables, gage subset comparisons"))
         
-        ggsave(paste0(PATH, "/10_GFOutput/2024_02_12/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_gagecomp.png"), plot = p1, width = 15, height = 8)
+        ggsave(paste0(PATH, "/10_GFOutput/", dir.date, "/figures/", sel.taxa, "_cumulative_importance_curve_", v.group, "vars_gagecomp.png"), plot = p1, width = 15, height = 8)
         
         }
       }
@@ -381,11 +405,13 @@ rm(sel.taxa, v.group, g.group, ci.cur.thm, max.cat, p1, plot.df, taxa.vect, var.
 
 #SCRATCH:
 # ##note: because of the way the function is set up, need to run the following lines before running split density plot
-# gf.out$call$compact <- TRUE
-# gf.out$call$nbin <- 201
-# plot(gf.out, plot.type = "S", imp.vars = most_important.gf.GW_lump,
-#      leg.posn = "topright", cex.legend = 0.9, cex.axis = 0.9,
-#      cex.lab = 1, line.ylab = 0.9, par.args = list(mgp = c(1.5, 0.5, 0), mar = c(3.1, 1.5, 0.1, 1)))
-# # 
-# # 
+gf.out <- readRDS(gf.list[[2]])
+gf.out$call$compact <- TRUE
+gf.out$call$nbin <- 201
+plot(gf.out, plot.type = "C", imp.vars = names(sort(gf.out$overall.imp, decreasing = TRUE)[1:5]),
+     # leg.posn = "topright", 
+     cex.legend = 0.9, cex.axis = 0.9,
+     cex.lab = 1, line.ylab = 0.9, par.args = list(mgp = c(1.5, 0.5, 0), mar = c(3.1, 1.5, 0.1, 1)))
+#
+#
 # plot(gf.out, plot.type = "Split.Density")

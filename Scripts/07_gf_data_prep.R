@@ -5,206 +5,130 @@ options(readr.show_col_types = FALSE)
 
 PATH <- getwd()
 
-#bring in occurrence data (for not this will be the already filtered datasets)
-#read in occ data ----
-fish <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/ARMOOK_Fishes_bysite23a_StreamCat_Flow_Full_15km.csv")) %>% select(-`...1`) %>%
-  select(-STAID_1, -STAID_2) %>%
-  mutate(STAID = paste0("0", STAID)) %>%
-  st_as_sf(., coords = c("site_x", "site_y"), crs = 26915, remove = FALSE) #NAD83 UTM Zone 15
-bug <- read_csv(paste0(PATH, "/01_BioDat/archive_occ_dat/BenthicInsect_23_StreamCat_Flow_Full_15km.csv")) %>%
-  mutate(STAID = paste0("0", STAID)) %>%
-  st_as_sf(., coords = c("site_x", "site_y"), crs = 4269, remove = FALSE) #NAD83 LL
-  
+#read in site data
+# file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
+# occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
+#                                                          long = col_number(),
+#                                                          site_id = col_character(),
+#                                                          COMID = col_character(),
+#                                                          gage_no_15yr = col_character(),
+#                                                          dist2gage_m_15yr = col_number(),
+#                                                          dist2strm_m_flw = col_number()))
 
-b.tax <- list(fish, bug)
+g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv")) %>%
+  select(-c(station_nm, site_tp_cd, coord_acy_cd, dec_coord_datum_cd, alt_va, alt_acy_va, alt_datum_cd, data_type_cd,
+            parm_cd, stat_cd, ts_id, count_nu, period, int_high))
 
-# snap to nearest nhd stream ----
-nhd <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/nhd_clip_state_eco.shp")) %>% 
-  st_transform(5070) #albers, projected crs
+#prep env dat ----
+#load in hit metrics
+hit <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240130.csv"))
 
-b.tax <- lapply(b.tax, function(x) { 
-  
-  nhd_near <- x %>%
-    st_transform(5070) %>% #NAD83 Conus Albers
-    st_nearest_feature(., nhd, check_crs = TRUE) #identify nearest nhd stream
-  
-  nhd_near <- nhd[nhd_near, ] #pull sites
-  
-  x$COMID_vCEM <- nhd_near$COMID #add COMID to data (vCEM to keep separate from original columns, update once cleaned data is used)
+##determine sites needing adjusted HIT metrics ----
+#intermittent streams and streams with zero flow days
+adj.sites <- data.frame(site_no = hit$site_no, is_intermit = rep(NA, nrow(hit)), is_zero_flw = rep(NA, nrow(hit)), prop_zero_flw = rep(NA, nrow(hit)))
 
-  dist <- as.vector(st_distance(st_transform(x, 5070), nhd_near, by_element = TRUE)) #get distance to nearest nhd strm + add to dataset
-  x$dist2strm_m_nhd <- round(dist, 3)
+for(i in seq_len(nrow(adj.sites))) {
+  site <- adj.sites$site_no[i]
   
-  return(x)
+  #check if flow type is intermittent
+  adj.sites[i, ]$is_intermit <- g.info[g.info$site_no == site, ]$flw_type == "Int"
   
-})
+  #check for zero flow days
+  #original raw flow dat
+  f <- file.path(PATH, "02_EnvDat/raw_daily_flow", 
+                 paste0(site, ifelse(file.exists(file.path(PATH, "/02_EnvDat/raw_daily_flow", paste0(site, "_long.csv"))), #check if clipped file exists
+                                     "_long.csv", ".csv")))
+  q <- read_csv(f, col_types = cols(site_no = col_character(), Date = col_date(), X_00060_00003 = col_number())) %>%
+    mutate(month = format(Date, "%m"), day = format(Date, "%d"))
+  
+  if(!any(names(q) %in% "X_00060_00003")) { next } #skip those that didn't have the right flow type
+  
+  adj.sites[i, ]$is_zero_flw <- any(q$X_00060_00003 == 0, na.rm = TRUE) #any zero flw days?
+  
+  adj.sites[i, ]$prop_zero_flw <- round((sum(q$X_00060_00003 == 0, na.rm = TRUE) / nrow(q)) * 100, 3) #how many zero flow days?
+  
+  rm(f, q)
+}
 
-#note! luckily seems to match original comid for the most part (like 10 differences)
+rm(i, site)
 
-# add hydro alt (McManamay et al. 2022) ----
+#set up hit metrics, keep adjusted for appropriate sites in df
+adj_vars <- gsub("_adj", "", names(hit)[grepl("_adj", names(hit))])
+adj.sites <- filter(adj.sites, is_intermit == TRUE | is_zero_flw == TRUE)
+
+new.hit <- hit[hit$site_no %in% adj.sites$site_no, ] %>%
+  select(-all_of(adj_vars)) %>%
+  rename_with(~gsub("_adj", "", .x))
+  
+hit <- bind_rows(
+  hit[!hit$site_no %in% new.hit$site_no, names(hit)[!grepl("_adj", names(hit))]],
+  new.hit
+)
+
+#bind to info
+env.dat <- left_join(g.info, hit)
+
+rm(new.hit, adj.sites, adj_vars)
+
+## add hydro alt (McManamay et al. 2022) ----
 h.alt <- read_csv(paste0(PATH, "/02_EnvDat/hydro_alt_disturb/predicted_alteration_US_model.csv"))
 h.alt <- h.alt %>% select(COMID, contains("pn"))
 
-b.tax <- lapply(b.tax, function(x) {
+env.dat <- left_join(env.dat, h.alt) 
+
+#fix NAs (no COMID in hydro alt dataset)
+env.dat <- env.dat %>% mutate(index = row_number())
+
+na.h.alt <- filter(env.dat, is.na(pnSeasonal)) %>%
+  st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269, remove = FALSE) %>%
+  st_transform(5070)
+na.coms <- na.h.alt$COMID
+
+nhd <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/nhd_clip_state_eco.shp")) %>% #nhd streams prev. clipped to region (good to use clipped because of MEM usage)
+  st_transform(5070)
   
-  tmp <- x %>%
-    left_join(h.alt, by = c("COMID_vCEM" = "COMID")) %>%
-    mutate(index = row_number())
+# Use a while loop to repeat na replacement until no NAs (search for nearest stream with h.alt data)
+while (nrow(na.h.alt) != 0) {
+  message(nrow(na.h.alt), " streams with no matching alteration stream ID...")
   
-  #fix NAs (no COMID in hydro alt dataset)
-  na <- tmp %>% filter(is.na(pnHA_rank))
-  na.coms <- na$COMID_vCEM
+  #redo stream snap to find next nearest stream
   nhd.na <- filter(nhd, !COMID %in% na.coms) #filter out NA comids
   
-  # Use a while loop to repeat na replacement until no NAs (search for nearest stream with h.alt data)
-  while (nrow(na) != 0) {
+  nhd_near <- st_nearest_feature(na.h.alt, nhd.na, check_crs = TRUE) #identify nearest nhd stream
     
-    cat(nrow(na), "rows in dataset\n")
+  nhd_near <- nhd.na[nhd_near, ] #pull sites
     
-    #redo stream snap to find next nearest stream
-    nhd_near <- na %>%
-      st_transform(5070) %>% #NAD83 Conus Albers
-      st_nearest_feature(., nhd.na, check_crs = TRUE) #identify nearest nhd stream
+  na.h.alt$COMID_atlNA <- nhd_near$COMID #add COMID to data
     
-    nhd_near <- nhd.na[nhd_near, ] #pull sites
+  dist <- as.vector(st_distance(st_transform(na.h.alt, 5070), nhd_near, by_element = TRUE)) #get distance to nearest nhd strm + add to dataset
+  na.h.alt$dist2strm_m_nhd_NA <- round(dist, 3)
     
-    na$COMID_vCEM_NA <- nhd_near$COMID #add COMID to data (vCEM to keep separate from original columns, update once cleaned data is used)
+  #rejoin w/ alt data and find if still NAs 
+  tmp.na <- na.h.alt %>% 
+    select(!contains(names(h.alt)), contains("COMID")) %>% 
+    st_drop_geometry() %>%
+    left_join(h.alt, by = c("COMID_atlNA" = "COMID"))
+  env.dat <- bind_rows(filter(env.dat, !index %in% tmp.na$index), tmp.na)
     
-    dist <- as.vector(st_distance(st_transform(na, 5070), nhd_near, by_element = TRUE)) #get distance to nearest nhd strm + add to dataset
-    na$dist2strm_m_nhd_NA <- round(dist, 3)
-    
-    #rejoin 
-    tmp.na <- na %>% 
-      select(!contains(names(h.alt)), contains("COMID")) %>% 
-      left_join(h.alt, by = c("COMID_vCEM_NA" = "COMID"))
-    tmp <- bind_rows(filter(tmp, !index %in% tmp.na$index), tmp.na)
-    
-    #check for NAs still
-    na <- tmp %>% filter(is.na(pnHA_rank))
-    na.coms <- c(na.coms, na$COMID_vCEM_NA)
-    nhd.na <- filter(nhd, !COMID %in% na.coms) #filter out NA comids
-
+  #check for NAs still
+  na.h.alt <- filter(env.dat, is.na(pnSeasonal)) %>%
+    st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269, remove = FALSE) %>%
+    st_transform(5070)
+  na.coms <- c(na.coms, na.h.alt$COMID_atlNA)
+  
   }
   
-  tmp <- tmp %>% select(-index) #remove the NA index
-  
-  return(tmp)
-  
-})
+env.dat <- env.dat %>% 
+  # select(-index) %>%
+  select(-c(COMID_atlNA, dist2strm_m_nhd_NA)) #good to check distance before removing!!
 
+rm(nhd.na, na.coms, na.h.alt, tmp.na, dist, nhd_near, nhd)
 
-# summarize stream temp values ----
-#occ data goes from 1900 to 2022, but the NCCV categorizes 1950 - 2005 as historical and 2006 - 2099 as 21st century period
-temp <- read_csv(paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly.csv"))
+##add stream temp ----
+strm_temp <- read_csv(paste0(PATH, "/02_EnvDat/predicted_stream_temps_summ_hist.csv"))
 
-temp.list <- list(temp %>% filter(date < "2006-01-15"), temp %>% filter(date > "2005-12-15")) #split historical and predicted data
+env.dat <- left_join(env.dat, strm_temp)
 
-summ.list <- lapply(temp.list, function(temp) {
-  
-  tmp <- temp %>%
-    #prep df
-    mutate(date = as.Date(date),
-           year = year(date),
-           month = month(date),
-           season = case_when(month %in% c(12, 1, 2) ~ "winter",
-                              month %in% c(3, 4, 5) ~ "spring",
-                              month %in% c(6, 7, 8) ~ "summer",
-                              month %in% c(9, 10, 11) ~ "fall")) %>%
-    #calc summ stats for each month
-    group_by(site_no, month) %>%
-    mutate(across(contains("pred_strm"), list(
-      mn = ~mean(.x, na.rm = T),
-      med = ~median(.x, na.rm = T),
-      max = ~max(.x, na.rm = T),
-      min = ~min(.x, na.rm = T)
-    ), .names = "mnth_{.fn}_{.col}")) %>%
-    ungroup() %>%
-    rename_with(.cols = contains("mnth"), ~ sub("pred_strm_temp", "temp", .x)) %>%
-    #calc summ stats for each season
-    group_by(site_no, season) %>%
-    mutate(across(contains("pred_strm"), list(
-      mn = ~mean(.x, na.rm = T),
-      med = ~median(.x, na.rm = T),
-      max = ~max(.x, na.rm = T),
-      min = ~min(.x, na.rm = T)
-    ), .names = "ssn_{.fn}_{.col}")) %>%
-    ungroup() %>%
-    rename_with(.cols = contains("ssn"), ~ sub("pred_strm_temp", "temp", .x)) %>%
-    #get avg annual CV
-    group_by(site_no, year) %>%
-    mutate(across(contains("pred_strm"), ~sd(.x, na.rm = T) / mean(.x, na.rm = T), .names = "yr_cv_{.col}")) %>%
-    ungroup()
-  
-  mnth <- tmp %>%
-    select(site_no, month, contains("mnth")) %>%
-    distinct() %>%
-    pivot_wider(id_cols = site_no, 
-                names_from = month,
-                values_from = contains("mnth"),
-                names_glue = "{.value}_{month}")
-  ssn <- tmp %>%
-    select(site_no, season, contains("ssn")) %>%
-    distinct() %>%
-    pivot_wider(id_cols = site_no, 
-                names_from = season,
-                values_from = contains("ssn"),
-                names_glue = "{.value}_{season}") 
-  cv <- tmp %>%
-    select(site_no, contains("yr")) %>%
-    distinct() %>%
-    group_by(site_no) %>%
-    summarize(across(contains("yr_cv"), ~ mean(.x, na.rm = T))) %>%
-    rename_with(.cols = contains("yr_cv"), ~ sub("yr_cv_pred_strm_temp", "ann_temp_cv", .x))
-  
-  summ.temp <- left_join(mnth, ssn) %>% left_join(., cv)
-  
-  return(summ.temp)
-})
-
-write_csv(summ.list[[1]], paste0(PATH, "/02_EnvDat/predicted_stream_temps_summ_hist.csv"))
-write_csv(summ.list[[2]], paste0(PATH, "/02_EnvDat/predicted_stream_temps_summ_future.csv"))
-
-b.tax <- lapply(b.tax, function(df) {
-  df <- df %>%
-    left_join(., summ.list[[1]], by = c("STAID" = "site_no"))
-})
-
-write_csv(b.tax[[1]], paste0(PATH, "/01_BioDat/archive_occ_dat/fish_bio_env_updated_20231110.csv"))
-write_csv(b.tax[[2]], paste0(PATH, "/01_BioDat/archive_occ_dat/bug_bio_env_updated_20231110.csv"))
+write_csv(env.dat, paste0(PATH, "/02_EnvDat/env_dat_combined_allsites.csv"))
 
 # some plots ----
-
-# temp %>% 
-#   filter(site_no == "06906800") %>%
-#   mutate(date = as.Date(date),
-#          year = year(date),
-#          month = as.factor(month(date))) %>%
-#   filter(year < 2025 & year > 2020) %>%
-#   ggplot() +
-#   geom_line(aes(x = date, y = pred_strm_temp_8.5)) +
-#   geom_point(aes(x = date, y = pred_strm_temp_8.5, color = month))
-
-# g.xy <- read_csv(paste0(PATH, "/02_EnvDat/all_hit_usgs_gage_info.csv")) %>%
-#   select(site_no, dec_long_va, dec_lat_va) %>% distinct() %>%
-#   st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269)
-# hlnd <- st_as_sf(maps::map("county", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>% #EPSG 4269 = NAD83
-#   st_transform(., crs = 4269)
-# 
-# tmp <- g.xy %>% left_join(., summ.list[[2]])
-# 
-# ggplot() +
-#   geom_sf(data = hlnd) +
-#   geom_sf(data = filter(tmp, !is.na(ann_temp_cv_4.5)), aes(fill = ann_temp_cv_4.5), shape = 21, size = 2.5, alpha = 0.7) +
-#   geom_sf(data = filter(tmp, is.na(ann_temp_cv_4.5)), fill = "grey50", shape = 21, size = 2, alpha = 0.5) +
-#   geom_sf(data = g.xy %>% filter(site_no == "07364150"), shape = 13, size = 6, color = "red") +
-#   scale_fill_viridis_c(breaks = seq(0, 0.7, 0.1), limits = c(-0.001, 0.71)) +
-#   guides(fill = guide_colorbar(title = "avg.\nannual\nCV")) +
-#   theme_minimal()
-# ggsave(paste0(PATH, "/99_figures/pred_strm_temp_cv_future_map.png"), width = 7, height = 5, bg = "white")
-
-
-
-
-
-
-
