@@ -137,13 +137,15 @@ occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          gage_no_15yr = col_character(),
                                                          dist2gage_m_15yr = col_number(),
                                                          dist2strm_m_flw = col_number()))
+occ.list <- list(occ.list[[2]])
 
 div_list <- read_csv(paste0(PATH, "/98_result_tables/site_div_alltax_alldiv_raw.csv"))
 
 #add COMID and flw type to diversity result
 xy_flw <- list()
 for(i in seq_along(occ.list)) {
-  if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  # if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  taxa <- "fish"
   xy_flw[[i]] <- occ.list[[i]] %>% select(site_id, lat, long, COMID, flw_type) %>% mutate(taxa = taxa)
 }
 
@@ -164,12 +166,28 @@ tmp <- div %>%
 ggplot() +
   geom_boxplot(data = tmp, aes(x = flw_type, y = value, fill = flw_type), na.rm = T) +
   # geom_jitter(data = tmp, aes(x = flw_type, y = value), alpha = 0.2, width = 0.3) +
-  facet_grid(div_type ~ taxa, scales = "free") +
+  # facet_grid(div_type ~ taxa, scales = "free") +
+  facet_wrap(~ div_type, scales = "free_y") +
   scale_fill_manual(values = flow.pal) +
   theme_bw() +
   theme(axis.title = element_blank())
-ggsave(paste0(PATH, "/99_figures/site_div_alltax_boxplot_comp.png"), width = 5, height = 8)
+ggsave(paste0(PATH, "/99_figures/site_div_fish_boxplot_comp.png"), width = 7, height = 5)
 
+## funct ~ rich scatterplot ----
+
+ggplot(data = tmp) +
+  geom_density(aes(value, fill = div_type)) +
+  facet_wrap(~ div_type, scales = "free") 
+
+ggplot(data = filter(div, n_sp > 1), aes(x = n_sp, y = f_disp, color = flw_type)) +
+  geom_point(aes(shape = flw_type), size = 2, alpha = 0.5) +
+  geom_smooth(method = "glm") +
+  scale_color_manual(values = flow.pal) +
+  coord_cartesian(ylim = c(0, 0.26)) +
+  theme_classic() +
+  guides(color = guide_legend(override.aes = list(fill = NA, size = 3, alpha = 1)))
+
+ggsave(paste0(PATH, "/99_figures/site_div_fish_rich-v-disp_comp.png"), width = 7, height = 5)
 
 ##map of site diversity ----
 #nhd load in

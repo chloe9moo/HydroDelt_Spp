@@ -452,6 +452,18 @@ bug <- bug %>%
 
 write_csv(bug, paste0(PATH, "/01_BioDat/occ_bug_inthigh_long_20240208.csv"))
 
+fish <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv"), col_types = cols(lat = col_number(),
+                                                                                                 long = col_number(),
+                                                                                                 lat_new = col_number(),
+                                                                                                 long_new = col_number(),
+                                                                                                 taxa_count = col_number(),
+                                                                                                 .default = "c"))
+
+fish <- fish %>%
+  mutate(species = ifelse(species == "Lepomis punctatus", "Lepomis miniatus", species))
+
+write_csv(fish, paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv"))
+
 rm(list = ls())
 
 # filter + widen for analysis ----
@@ -494,8 +506,8 @@ bug_names <- occ.adj[[1]] %>%
   select(subfamily, tribe, genus) %>%
   filter(!(is.na(subfamily) & is.na(tribe) & is.na(genus))) %>%
   group_by(subfamily, tribe, genus) %>%
-  summarise(ttl_records = n(), .groups = "drop")
-  distinct()
+  summarise(ttl_records = n(), .groups = "drop") #%>%
+  # distinct()
 
 bug <- occ.adj[[1]] %>%
   #not really sure if I want to do it this way (to remove ambiguous names or group together)

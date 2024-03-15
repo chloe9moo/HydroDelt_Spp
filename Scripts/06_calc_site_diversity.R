@@ -13,7 +13,9 @@ occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          gage_no_15yr = col_character(),
                                                          dist2gage_m_15yr = col_number(),
                                                          dist2strm_m_flw = col_number())) 
-file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "na_removed", full.names = TRUE)
+occ.list <- list(occ.list[[2]])
+
+file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "imputed", full.names = TRUE)
 traits <- lapply(file.list, read_csv)
 
 #site richness ----
@@ -36,7 +38,8 @@ rich_res <- lapply(occ.list, function(x) {
 })
 
 for(i in seq_along(rich_res)) {
-  if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  # if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  taxa <- "fish"
   
   write_csv(rich_res[[i]][[1]], paste0(PATH, "/98_result_tables/site_div_rich_", taxa, ".csv"))
   write_csv(rich_res[[i]][[2]], paste0(PATH, "/98_result_tables/site_div_species_x_site_", taxa, ".csv"))
@@ -74,8 +77,8 @@ lvls[[1]] <- list(
                   life_span = c("vshort", "short", "long")
                   )
 lvls[[2]] <- list(
-                  spawn_freq = c("Single", "Multiple"), 
-                  temp_pref = c("Cold", "Cold/cool", "Cool", "Cool/warm", "Warm") 
+                  spawn_freq = c("single", "multiple"), 
+                  temp_pref = c("cold", "cold/cool", "cool", "cool/warm", "warm") 
                   # col_pos = c("Benthic", "Non-benthic") #not ordered
                   )
 
@@ -96,13 +99,16 @@ for(i in seq_along(occ.list)) {
   x <- occ.list[[i]]
   t <- t_mod[[i]]
   
+  #match spp
   x <- x[, names(x) %in% rownames(t)]
   x <- x[sort(names(x))]
   t <- t[rownames(t) %in% names(x), ]
   t <- t[match(names(x), rownames(t)),]
+  
   fdiv <- dbFD(x = t, a = x, corr = "cailliez", calc.FRic = FALSE)
   
-  if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  # if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  taxa <- "fish"
   
   #make df
   div_list[[i]] <- data.frame(taxa = rep(taxa, length(fdiv$nbsp)),

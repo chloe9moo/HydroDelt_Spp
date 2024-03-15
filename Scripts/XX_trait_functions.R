@@ -33,7 +33,8 @@ site_x_trait <- function(site_dat, #wide format site data
                          trait_dat, #trait data, no NAs, only species name and traits
                          tax_col_name = c("taxa", "species"), #column location for taxa ID name
                          site_cols = c("lat", "long", "COMID", "flw_type", "gage_no_15yr", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id"), #site cols to ignore
-                         convert_cont_to_cat = TRUE,
+                         convert_cont_to_cat = TRUE, #convert continuous traits to categorical
+                         match_spp_across_dat = TRUE, #filter spp to match within each dataset
                          matrix_type = c("presence/absence", "abundance")) 
 {
   #prep site matrix for joining to traits
@@ -78,6 +79,11 @@ site_x_trait <- function(site_dat, #wide format site data
   #join site x traits
   if(!"taxa" %in% names(t)) { #rename taxa name column for joining
     names(t)[names(t) %in% tax_col_name] <- "taxa"
+  }
+  
+  if(match_spp_across_dat) {
+    t <- t[t$taxa %in% o$taxa, ]
+    o <- o[o$taxa %in% t$taxa, ]
   }
   
   #check for matching taxa names

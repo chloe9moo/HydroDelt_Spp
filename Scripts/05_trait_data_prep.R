@@ -164,7 +164,7 @@ f.cols2 <- t.cols %>%
 tmp <- f2 %>%
   select(genus, species, RGUILD) %>%
   pivot_longer(cols = -c(genus, species), names_to = "Trait_group", values_to = "Trait") %>%
-  left_join(., f.cols2, by = c("Trait_group" = "database_col_name"), multiple = "all") %>% #rename traits for consistency 
+  left_join(., f.cols2, by = c("Trait_group" = "database_col_name"), multiple = "all", relationship = "many-to-many") %>% #rename traits for consistency 
   group_by(Trait_group) %>%
   filter(str_detect(Trait, regex(trait_cat, ignore_case = TRUE))) %>% #remove extra rows created by join (by selecting only rows where cat == value)
   mutate(value = 1) %>% #prep for widening dataframe
@@ -186,13 +186,16 @@ f2 <- f2 %>%
   left_join(., tmp) %>%
   mutate(db_orig = "olden")
 
-##combine databases + summ. ----
+##combine databases ----
 fish <- bind_rows(f1, f2, f3) %>% select(-spp_ep)
 
 write_csv(fish, paste0(PATH, "/20_Traits/trait_dat_raw_fish.csv"))
 
+##summarize 1 row per species ----
+fish <- read_csv(paste0(PATH, "/20_Traits/trait_dat_raw_fish.csv"))
+
 fish.sum <- fish %>%
-  filter(species %in% f.spp$species) %>%
+  filter(species %in% f.spp$species) %>% #generous estimate of spp list for now
   mutate(across(.cols = unique(f.cols[f.cols$trait_type == "binary", ]$trait_name),
                 as.numeric)) %>%
   group_by(genus, species) %>%
@@ -229,19 +232,14 @@ write_csv(fish.sum, paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
 
 rm(f1, f2, f3, tmp, tmp1, f.cols2, c.key)
 
-##pair to species list ----
+##pair to more conservative species list ----
 fish.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
 fish <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv")) %>% select(order, family, genus, species) %>% distinct()
 
 fish.traits <- left_join(fish, fish.sum)
 
-write_csv(fish.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
-
 ##identify missing traits ----
-fish.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
-
-na.check <- f.spp %>%
-  left_join(., fish.sum) %>%
+na.check <- fish.traits %>%
   mutate(troph = rowSums(!is.na(select(., starts_with("troph_")))),
          hab.pref = rowSums(!is.na(select(., matches("bed|bould|claysilt|cob|debr|grav|lwd|muck|sand|veg")))),
          hab.flow = rowSums(!is.na(select(., matches("fast|mod|slow")))),
@@ -251,7 +249,8 @@ na.check <- f.spp %>%
   select(-contains("hab_"), -contains("troph_"), -matches("winter|spring|summer|fall"), -matches("_ng_|_g_|indiff|offshore")) %>%
   mutate(across(everything(), as.character)) %>%
   pivot_longer(-c(order, family, genus, species), names_to = "trait", values_to = "value") %>%
-  filter(is.na(value))
+  filter(is.na(value)) %>%
+  arrange(species, trait)
 
 write_csv(na.check, paste0(PATH, "/20_Traits/trait_dat_fish_miss_dat_list_20240109.csv"))
 
@@ -309,9 +308,7 @@ tmp <- tmp %>%
                                                                            NA, replace_na(.x, 0))))
 
 #pair to spp names
-fish <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_15k_wide_20240214.csv"))
 f.spp <- read_csv(paste0(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv"))) %>% select(order, family, genus, species) %>% distinct()
-f.spp <- f.spp[f.spp$species %in% gsub("_", " ", names(fish)), ]
 
 fish.traits <- left_join(f.spp, tmp)
 
@@ -327,9 +324,9 @@ library(missForest); library(tidyverse)
 
 PATH <- getwd()
 
-fish.traits <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish_with_updates.csv"))
+fish.traits <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish_with_updates.csv")) %>%
+  filter(!species %in% c("Etheostoma duryi", "Dicentrarchus punctatus", "Phoxinus phoxinus")) #for now
 
-tmp <- data.frame()
 #get binary traits
 bi.vars <- sapply(fish.traits, function(x) {
   if(is.character(x) | is.factor(x)) {
