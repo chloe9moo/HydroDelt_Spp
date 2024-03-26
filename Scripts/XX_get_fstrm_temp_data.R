@@ -1,12 +1,12 @@
 ## OBTAIN AND PREP DATA FOR FINE SCALE STREAM TEMP
-# 
-# modified from the methods of Middaugh et al. 2016 (Ecology of Freshwater Fish)
 
 ## STEPS:
 #1. Download temperature data for USGS gages
 #2. Calculate monthly mean temperature for each month of data (weekly?)
-#3. Exclude months with fewer than 20 days temp data
-#4. Collect monthly (weekly?) mean air temp from PRISM
+#3. Compile external water temp sources
+#4. Exclude months with fewer than 20 days temp data
+#5. Collect monthly (weekly?) mean air temp from PRISM
+#6. Extract air temp at sites
 
 #OLD:
 #4. Collect monthly mean air temp from the National Oceanic and Atmospheric Agency National Center for Climate Data
@@ -142,12 +142,13 @@ write_csv(summ.temp[["weekly"]], paste0(PATH, "/02_EnvDat/raw_stream_temp/USGS_w
 
 rm(temp.all, summ.temp, hit)
 
-#2+. Clean, compile, collected temperature data ----
+#3+. Clean, compile, collected temperature data ----
 dirs <- list.dirs(paste0(PATH, "/02_EnvDat/raw_stream_temp/non_usgs_temp_data"), recursive = FALSE)
 
 tmp <- list.files(dirs[[1]], "[0-9].csv", full.names = TRUE)
 
-##eel ----
+##3a. load in external temp sources ----
+###eel ----
 h <- readxl::read_excel(list.files(path = dirs[[1]], pattern = "[Hh]eader", full.names = TRUE), skip = 6) #get site info
 t <- lapply(list.files(dirs[[1]], "[0-9].csv", full.names = TRUE), read_csv, skip = 1) #read in individual temp files
 #one was wonky, so I corrected the column names in command line and reload a different way
@@ -195,7 +196,7 @@ t <- t %>%
   arrange(site_no, year, month, day)
 write_csv(t, paste0(PATH, "/02_EnvDat/raw_stream_temp/non_usgs_temp_data/eel_water_daily_temp.csv"))
 
-##MO JODI----
+###MO JODI----
 h <- read_csv(list.files(path = dirs[[2]], pattern = "[Hh]eader", full.names = TRUE))
 t <- lapply(list.files(dirs[[2]], "[0-9].csv", full.names = TRUE), read_csv) #read in individual temp files
 
@@ -224,7 +225,7 @@ t <- t %>%
   distinct()
 write_csv(t, paste0(PATH, "/02_EnvDat/raw_stream_temp/non_usgs_temp_data/MO_water_daily_temp.csv"))
 
-## strawberry ----
+### strawberry ----
 h <- readxl::read_excel(list.files(path = dirs[[3]], pattern = "[Hh]eader", full.names = TRUE), skip = 6)
 t <- lapply(list.files(dirs[[3]], "[0-9].xlsx", full.names = TRUE), readxl::read_excel) #read in individual temp files
 
@@ -260,7 +261,7 @@ t <- t %>%
   arrange(site_no, year, month, day)
 write_csv(t, paste0(PATH, "/02_EnvDat/raw_stream_temp/non_usgs_temp_data/strawb_water_daily_temp.csv"))
 
-##adams lab ----
+###adams lab ----
 h <- read_csv(list.files(path = dirs[[4]], pattern = "[Hh]eader", full.names = TRUE), skip = 6)
 h <- h %>% mutate(FileName = gsub(".csv", "", FileName))
 t <- lapply(list.files(dirs[[4]], ".csv", full.names = TRUE)[-22], read_csv) #read in individual temp files, ignore header file
@@ -293,7 +294,7 @@ write_csv(t, paste0(PATH, "/02_EnvDat/raw_stream_temp/non_usgs_temp_data/uca_wat
 
 rm(h, t, summ.temp)
 
-##compile ALL data into single file, with location info ----
+##3b. compile ALL data into single file, with location info ----
 #dailies
 #usgs dat
 us <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/USGS_water_temp_ARMOOK_dvonly_20240312.csv"))
@@ -333,7 +334,15 @@ write_csv(all.temp[["weekly"]], paste0(PATH, "/02_EnvDat/raw_stream_temp/comb_wa
 
 rm(all.temp, nu, us, wtemp, site.info)
 
-#3. Minimum data exclusion ----
+##3c. Attach gage data to streams + add flow cat ----
+source(paste0(PATH, "/Scripts/XX_strm_flw_info_func.R"))
+
+temp.site.info <- get_strm_flow_info(site_data = wtemp[["monthly"]])
+temp.site.info <- temp.site.info %>% select(site_no, Lat, Long, COMID, contains("dist"), contains("flw")) %>% distinct()
+
+write_csv(temp.site.info, paste0(PATH, "/02_EnvDat/raw_stream_temp/comb_water_monthly_location_info.csv"))
+
+#4. Minimum data exclusion ----
 wtemp <- lapply(list.files(paste0(PATH, "/02_EnvDat/raw_stream_temp"), "comb_water", full.names = TRUE), read_csv)
 names(wtemp) <- c("daily", "monthly", "weekly")
 
@@ -347,14 +356,19 @@ wtemp[["monthly"]] <- wtemp[["monthly"]] %>%
   mutate(date = with(., sprintf("%d-%02d", year, month))) %>%
   filter(!is.na(Lat))
 
-#minimum for weekly is at least 5 days of data per included week
-wtemp[["weekly"]] <- wtemp[["weekly"]] %>%
-  filter(ct >= 5) %>%
-  filter(!is.na(Lat))
+# #minimum for weekly is at least 5 days of data per included week
+# wtemp[["weekly"]] <- wtemp[["weekly"]] %>%
+#   filter(ct >= 5) %>%
+#   filter(!is.na(Lat))
 
-#4. Get prism data ----
+#5. Get prism data across ALL dates ----
 library(prism); library(terra)
 
+#load hit dates 
+hit.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
+hit.info <- hit.info[, names(hit.info) %in% c("site_no", "dec_long_va", "dec_lat_va", "hit_start_date", "hit_end_date")]
+
+#set prism download directory
 prism_set_dl_dir(paste0(PATH, "/02_EnvDat/raw_air_temp/prism"))
 
 #for now at least, going to go with monthly for space usage
@@ -363,16 +377,20 @@ prism_set_dl_dir(paste0(PATH, "/02_EnvDat/raw_air_temp/prism"))
 # get_prism_dailys(type = "tmean", dates = date_vect[2:4])
 
 date_vect <- wtemp[["monthly"]]$year
-min <- min(date_vect)
-max <- max(date_vect)
+min <- min(c(date_vect, year(hit.info$hit_start_date)))
+max <- max(c(date_vect, year(hit.info$hit_start_date)))
 get_prism_monthlys(type = "tmean",
                    years = min:max,
                    mon = seq(1, 12),
-                   keepZip = TRUE, #can remove the full files after clipping
+                   keepZip = TRUE, #can remove the unzipped files after clipping
                    keep_pre81_months = TRUE)
 
-#get lat long of gages for clipping
+#get lat long of all gages for clipping
 coords <- wtemp[["monthly"]] %>% select(Lat, Long) %>% distinct()
+coords <- bind_rows(
+  coords,
+  hit.info %>% select(dec_lat_va, dec_long_va) %>% rename(Lat = dec_lat_va, Long = dec_long_va)
+)
 coords <- st_as_sf(coords, coords = c("Long", "Lat"), crs = 4269)
 coords <- st_bbox(coords)
 #add some wiggle room
@@ -407,10 +425,14 @@ for(i in seq_along(prism.list)) {
 # # # # plot(hlnd$geom, add = TRUE)
 # plot(coords$geometry, add = TRUE)
 
-#5. Extract temperature values for regression prep ----
+#6. Extract temperature values for regression prep ----
 #get lat long of for value extracting
 coords <- wtemp[["monthly"]] %>% select(site_no, Lat, Long) %>% distinct()
-# coords <- st_as_sf(coords, coords = c("Long", "Lat"), crs = 4269, remove = FALSE)
+coords <- bind_rows(
+  coords,
+  hit.info %>% select(site_no, dec_lat_va, dec_long_va) %>% rename(Lat = dec_lat_va, Long = dec_long_va)
+)
+coords <- distinct(coords)
 
 #get list of clipped rasters
 prism.list <- list.files(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters"))
@@ -441,100 +463,4 @@ for(i in seq_along(prism.list)) {
 
 write_csv(a_temp, paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_strm_gage_sites.csv"))
 
-YOU ARE HERE!!!!! GET SITE INFO NEXT?? AND THEN MAKE REGRESSIONS?? MAYBE GO AHEAD AND EXTRACT VALUES FOR STRM GAGES TOO??
-
-#5. Attach gage data to streams + add flow cat ----
-nhd <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/nhd_clip_state_eco.shp")) %>% 
-  st_transform(5070)
-temp.sites <- st_as_sf(w_temp %>% select(site_no, Lat, Long) %>% filter(!is.na(Lat)) %>% distinct(), coords = c("Long", "Lat"), crs = 4269)
-alb.sites <- temp.sites %>% st_transform(5070)
-
-#assign COMID to each site + calc distance to nearest line (meters)
-nr.line <- st_nearest_feature(alb.sites, nhd, check_crs = TRUE) #find nearest nhd strm
-nhd_near <- nhd[nr.line,]
-temp.sites$COMID <- nhd_near$COMID #add comid match to sites
-dist <- as.vector(st_distance(alb.sites, nhd_near, by_element = TRUE)) #get distance to nearest nhd strm
-temp.sites$dist2strm_m_nhd <- dist
-
-#assign flow_type to each site + calc distance to nearest line (meters)
-flw <- st_read(dsn = paste0(PATH, "/02_EnvDat/raw_flow_regime_dat/Interior Highlands Natural Flow Regimes.gdb"), layer = "Polylines") %>% select(-PopupInfo) %>%
-  st_transform(5070)
-flw <- flw %>% filter(Flow_type != "BigR")
-nr.line <- st_nearest_feature(alb.sites, flw, check_crs = TRUE) #find nearest strm not river
-flw_near <- flw[nr.line,]
-temp.sites$flw_name <- flw_near$Name #add strm names
-temp.sites$flw_type <- flw_near$Flow_type #add flow types
-dist <- as.vector(st_distance(alb.sites, flw_near, by_element = TRUE)) #get distance from site to strm assigned
-temp.sites$dist2strm_m_flw <- dist
-
-rm(nhd, flw, alb.sites, flw_near, nhd_near, dist, nr.line)
-
-#save location info
-temp.sites <- temp.sites %>%
-  mutate(Long = st_coordinates(.)[,"X"],
-         Lat = st_coordinates(.)[,"Y"],
-         across(contains("dist2strm"), ~ round(.x, digits = 3)))
-write_csv(temp.sites, paste0(PATH, "/02_EnvDat/raw_stream_temp/all_water_temp_locations_info.csv"))
-
-
-
-
-# + Plot data available ----
-#armook counties
-hlnd <- st_as_sf(maps::map("county", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>% #EPSG 4269 = NAD83
-  st_transform(., crs = 4269)
-#county fips
-ids <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/county_fips_master.csv")) %>%
-  mutate(fips = case_when(nchar(as.character(fips)) == 4 ~ paste0("0", as.character(fips)),
-                          T ~ as.character(fips))) %>%
-  filter(state_abbr %in% c("AR", "OK", "MO"))
-#ecoregion with flow types
-eco <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp")) %>%
-  st_union()
-water_sites <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/all_water_temp_locations_info.csv")) %>%
-  mutate(source = case_when(grepl("^[0-9]+$", site_no) & nchar(site_no) >= 8 ~ "USGS Gage",
-                            grepl("^[0-9]+$", site_no) & nchar(site_no) <= 3 ~ "MO_Jodi",
-                            grepl("^1099", site_no) & grepl("[Ss]traw", site_no) ~ "Strawberry",
-                            grepl("^[0-9]+", site_no) & grepl("Ouachita", site_no) ~ "Eel",
-                            T ~ "UCA_AdamsLab")) %>%
-  st_as_sf(., coords = c("Long", "Lat"), crs = 4269)
-#county shp to fips join
-# sf_use_s2(FALSE)
-eco.buff <- eco %>% st_buffer(dist = 0.09)
-
-water_sites <- water_sites %>% 
-  mutate(in_eco_reg = st_within(., eco.buff),
-         in_eco_reg = ifelse(as.numeric(in_eco_reg) == 1, TRUE, FALSE),
-         in_eco_reg = ifelse(is.na(in_eco_reg), FALSE, in_eco_reg))
-
-counties <- hlnd %>% 
-  st_join(., water_sites) %>% 
-  filter(!is.na(site_no)) %>% 
-  rename(county = ID) %>%
-  distinct() %>%
-  mutate(state_abbr = case_when(grepl("arkansas", county, fixed = TRUE) ~ "AR",
-                                grepl("missouri", county, fixed = TRUE) ~ "MO",
-                                grepl("oklahoma", county, fixed = TRUE) ~ "OK",
-                                T ~ NA),
-         county_name = sub("^.*?,", "", county),
-         county_name = paste(str_to_title(county_name), "County"),
-         county_name = ifelse(grepl("Mc", county_name, fixed = TRUE), gsub("(Mc)([a-z])", "\\1\\U\\2", county_name, perl = TRUE), county_name),
-         county_name = ifelse(grepl("St ", county_name, fixed = TRUE), gsub("St ", "St. ", county_name), county_name), 
-         county_name = ifelse(grepl("St. Louis City", county_name, fixed = TRUE), "St. Louis city", county_name)) %>%
-  left_join(., ids %>% select(county_name, state_abbr, fips), by = c("county_name", "state_abbr")) #add in fips code for search
-# write_csv(counties %>% st_drop_geometry(), paste0(PATH, "/02_EnvDat/raw_stream_temp/all_water_temp_locations_countyflowinfo.csv"))
-
-p1 <- ggplot() +
-  geom_sf(data = hlnd) +
-  geom_sf(data = counties, fill = "darkgrey") +
-  geom_sf(data = eco, fill = NA, color = "black", lwd = 1) +
-  geom_sf(data = water_sites, aes(shape = source, color = flw_type), size = 2) +
-  scale_color_viridis_d(end = 0.9) +
-  theme_minimal()
-# p1
-ggsave(paste0(PATH, "/99_figures/fine_scale_temp_site_map.png"), plot = p1, dpi = 300, width = 8, height = 6, bg = "white")
-
-
-
-
-
+# rm(a_temp, a_temp1, coords, prism.rast, prism.c, max, min, rast_name, date, date_vect) #clean up env
