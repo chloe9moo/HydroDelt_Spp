@@ -664,9 +664,10 @@ write_csv(bug.traits, paste0(PATH, "/20_Traits/trait_dat_summ_bug_na_removed.csv
 rm(list = ls())
 
 #ALL TAXA ----
+library(tidyverse)
+
 PATH <- getwd()
 source(paste0(PATH, "/Scripts/XX_trait_functions.R"))
-#NOTE!! NEED TO UPDATE FUNCTION TO HANDLE CONTINUOUS TRAITS IF NOT CONVERTING TO CAT!!!!
 
 #sites
 file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
@@ -683,11 +684,69 @@ occ.list <- list(occ.list[[2]]) #for now, without imputed bug data
 file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "trait_dat_summ_(fish|bug)_imputed", full.names = TRUE)
 traits <- lapply(file.list, read_csv)
 
+## trait clustering ----
+library(cluster); library(vegan)
+
+#this can be used to identify the possible levels within a trait dataset
+# lvls <- lapply(t_mod, function(x) {
+#   lapply(select(x, where(is.character)), unique) #check potential cat levels
+# })
+#for ordinal variables
+oc <- list(
+  spawn_freq = c("single", "multiple"), 
+  temp_pref = c("cold", "cold/cool", "cool", "cool/warm", "warm") 
+  # col_pos = c("Benthic", "Non-benthic") #not ordered
+)
+
+group_res_list <- comp_trait_groups(trait_dat =  traits[[1]][,-c(1:3)], ord_col = oc, max_k = 100)
+
+###plots to look at groups ----
+#dendrogram
+library(dendextend)
+pltree(group_res_list$hierarchical_cluster_results, cex = 0.6, labels = FALSE)
+
+dend <- group_res_list$hierarchical_cluster_results %>% as.dendrogram %>% hang.dendrogram
+par(mar = c(15,2,1,1))
+dend %>% color_branches(k=10) %>% color_labels(k=15) %>% plot
+dend %>% rect.dendrogram(k=10)
+
+#compare silhouette, r2
+clust.df <- group_res_list[["group_comp_results"]]
+group_res_list[["hierarchical_cluster_results"]]$height
+plot(clust.df$k, clust.df$mn_sil_w, type = "b", pch = 19)
+plot(clust.df$k, clust.df$grp_r2, type = "b", pch = 19)
+
+ggplot() +
+  geom_point(data = clust.df, aes(x = mn_sil_w, y = grp_r2, fill = k), shape = 21, size = 3) +
+  scale_fill_viridis_c() +
+  theme_minimal()
+
+#pcoa vizualize
+plot_clusters(trait_group_output = group_res_list, num_clust = 20, return_pc = c(1,4),
+              ellipse = TRUE, vectors = TRUE, trait_dat = traits[[1]][,-c(1:3)], ord_col = oc)
+
+table(cutree(group_res_list[["hierarchical_cluster_results"]], k = 20))
+
+#assign groups and make site_x_trait matrix
+clust <- cutree(group_res_list$hierarchical_cluster_results, k = 20)
+clust <- as.data.frame(clust) %>% rownames_to_column("species") %>% mutate(clust = paste0("clust", clust))
+
+clust.wide <- site_x_trait(occ.list[[1]], clust)
+write_csv(clust.wide[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence_clust.csv"))
+write_csv(clust.wide[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance_clust.csv"))
+
 ## site by trait matrices ----
+#convert continuous vars
 fish <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:3)])
 
-write_csv(fish[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence.csv"))
-write_csv(fish[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance.csv"))
+write_csv(fish[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence_cont2cat.csv"))
+write_csv(fish[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance_cont2cat.csv"))
+
+#don't convert
+fish <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:3)], convert_cont_to_cat = FALSE)
+
+write_csv(fish[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence_cont2mn.csv"))
+write_csv(fish[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance_cont2mn.csv"))
 
 # summarize + plot ----
 library(vegan); library(ape)
