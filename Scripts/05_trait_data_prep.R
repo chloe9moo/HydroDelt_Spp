@@ -722,7 +722,7 @@ ggplot() +
   theme_minimal()
 
 #pcoa vizualize
-plot_clusters(trait_group_output = group_res_list, num_clust = 20, return_pc = c(1,4),
+plot_clusters(trait_group_output = group_res_list, num_clust = 20, return_pc = c(1,2),
               ellipse = TRUE, vectors = TRUE, trait_dat = traits[[1]][,-c(1:3)], ord_col = oc)
 
 table(cutree(group_res_list[["hierarchical_cluster_results"]], k = 20))

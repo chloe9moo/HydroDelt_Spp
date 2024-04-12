@@ -11,9 +11,9 @@ if(!"tidyverse" %in% (.packages())) { #needs sf package to work
 }
 
 get_strm_flow_info <- function(site_data, 
-                               id_col = c("site_no"), 
-                               coord_cols = c("Long", "Lat"),
-                               site_crs = 4269,
+                               id_col = c("site_no"), #for saving site ID
+                               coord_cols = c("Long", "Lat"), #in correct order  (x, y)
+                               site_crs = 4269, #crs of the original coordinate data
                                get_COMID = TRUE,
                                get_COMID_dist = TRUE,
                                get_flw_type = TRUE,

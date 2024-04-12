@@ -278,7 +278,10 @@ occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
 # rm(list = ls())
 
 #find + snap nearest nhd, flow, and gages ----
+##NOTE: ON APRIL 11, 2024, REMOVED SOME NHD STREAMS IN QGIS THAT DIDN'T HAVE STREAMCAT DATA (N=30)
+##ALSO EDITED 2 FLOWLINES BY REMOVING A PART OF THE MULTILINE (FOR JOINING), FOR ONE FLOWLINE, ITS WEIRDLY CROPPED BUT IT'S BEYOND THE RANGE OF THE STUDY AREA
 PATH <- getwd()
+
 file.list <- list.files(paste0(PATH, "/01_BioDat/"), pattern = "inthigh_long", full.names = TRUE)
 occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          long = col_number(),
@@ -320,38 +323,70 @@ occ.list[[2]] <- bind_cols(occ.list[[2]], near_strms[[2]])
 
 rm(near_strms)
 
-###get central coordinate for grouped COMIDs ----
+###get midpoint coordinate for COMIDs ----
+#reduce NHD datset
+comids <- lapply(occ.list, function(x) x$COMID)
+comids <- unique( c(comids[[1]], comids[[2]]) )
+nhd.sub <- nhd[nhd$COMID %in% comids, ]
 
-nhd.center <- lapply(occ.list, function(x) {
-  n.sub <- nhd %>%
-    filter(COMID %in% x$COMID)
-  
-  n.center <- st_centroid(n.sub) %>%
-    st_transform(4269) %>%
-    select(COMID) %>%
-    mutate(long_new = st_coordinates(.)[, "X"],
-           lat_new = st_coordinates(.)[, "Y"]) %>%
-    st_drop_geometry()
-  
-  return(n.center)
-})
+#find midpoint along all lines
+nhd.linestring <- st_cast(nhd.sub, "LINESTRING")
 
-occ.list[[1]] <- left_join(occ.list[[1]], nhd.center[[1]])
-occ.list[[2]] <- left_join(occ.list[[2]], nhd.center[[2]])
+nhd.midpoint <- st_line_sample(nhd.linestring, sample = 0.5) %>% 
+  st_transform(4269) #get NAD83 x, y
 
-rm(nhd, nhd.center)
+nhd.midpoint <- data.frame(COMID = nhd.linestring$COMID,
+                           long_new = st_coordinates(nhd.midpoint)[, "X"],
+                           lat_new = st_coordinates(nhd.midpoint)[, "Y"])
+
+nhd.midpoint <- nhd.midpoint[!duplicated(nhd.midpoint$COMID),] #note, this will just take first duplicate, which in this case is fine but other cases a more nuanced approach might be needed
+
+#add new lat long to occurrence dataframe
+occ.list <- lapply(occ.list, function(x) { left_join(x, nhd.midpoint) })
+
+rm(nhd, nhd.midpoint, nhd.linestring)
 
 # #plot check
 # ggplot() +
-#   geom_sf(data = n.sub[2,]) +
-#   geom_sf(data = n.center[2,], color = "red") +
+#   geom_sf(data = nhd.sub[2,]) +
+#   geom_sf(data = st_as_sf(nhd.midpoint[2,], coords = c("long_new", "lat_new"), crs = 4269), color = "red") +
 #   theme_minimal()
+
+#save
+write_csv(occ.list[[1]], paste0(PATH, "/01_BioDat/occ_bug_inthigh_long.csv"))
+write_csv(occ.list[[2]], paste0(PATH, "/01_BioDat/occ_fish_inthigh_long.csv"))
+
+####get distance between old and new coordinates for later (JIC) ----
+old.pt <- lapply(occ.list, st_as_sf, coords = c("long", "lat"), remove = FALSE, crs = 4269)
+new.pt <- lapply(occ.list, st_as_sf, coords = c("long_new", "lat_new"), remove = FALSE, crs = 4269)
+
+dist <- vector("list", length(old.pt))
+for(i in seq_along(old.pt)) {
+  
+  dist[[i]] <- st_distance(old.pt[[i]], new.pt[[i]], by_element = TRUE) #get distance between coordinates
+  
+  dist[[i]] <- bind_cols(occ.list[[i]], dist[[i]])
+  
+  colnames(dist[[i]])[ncol(dist[[i]])] <- "dist_new_old_coord"
+  
+  dist[[i]] <- dist[[i]] %>%
+    select(COMID, matches("lat|long"), dist_new_old_coord) %>%
+    distinct()
+  
+}
+
+lapply(dist, function(x) max(x$dist_new_old_coord)) #get furthest distance b/w old/new coords
+
+write_csv(dist[[1]], paste0(PATH, "/01_BioDat/occ_bug_dist_updated_coords.csv"))
+write_csv(dist[[2]], paste0(PATH, "/01_BioDat/occ_fish_dist_updated_coords.csv"))
+
+rm(new.pt, old.pt, dist)
 
 ##remake spatial w/ projected crs + new consolidated coordinates
 sf.albers <- lapply(occ.list, st_as_sf, coords = c("long_new", "lat_new"), remove = FALSE, crs = 4269)
 sf.albers <- lapply(sf.albers, st_transform, crs = 5070)
 
-##snap to classified flow regime ----
+##snap to classified flow regimes ----
 flw <- st_read(dsn = paste0(PATH, "/02_EnvDat/raw_flow_regime_dat/Interior Highlands Natural Flow Regimes.gdb"), layer = "Polylines") %>% select(-PopupInfo) %>%
   st_transform(5070)
 flw <- flw %>% filter(Flow_type != "BigR")
@@ -375,6 +410,10 @@ near_flw <- lapply(sf.albers, function(x) {
 occ.list[[1]] <- bind_cols(occ.list[[1]], near_flw[[1]])
 occ.list[[2]] <- bind_cols(occ.list[[2]], near_flw[[2]])
 
+#save
+write_csv(occ.list[[1]], paste0(PATH, "/01_BioDat/occ_bug_inthigh_long.csv"))
+write_csv(occ.list[[2]], paste0(PATH, "/01_BioDat/occ_fish_inthigh_long.csv"))
+
 rm(near_flw, flw)
 
 ##snap to gage ----
@@ -382,9 +421,9 @@ g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 g.sf <- st_as_sf(g.info, coords = c("dec_long_va", "dec_lat_va"), remove = FALSE, crs = 4269) %>%
   st_transform(5070)
 
-snap_gage <- function(x, yr_to_clip, df_gage_obj) {
+snap_gage <- function(x, yr_to_clip, df_gage_obj) { #yr_to_clip is so I can attach either gages with 15 yrs of data OR with 10 years of data
   
-  res_list <- list()
+  res_list <- vector("list", length(yr_to_clip))
   
   for(i in seq_along(yr_to_clip)) {
     yr_min <- yr_to_clip[i]
@@ -422,17 +461,13 @@ occ.list[[2]] <- occ.list[[2]] %>% mutate(across(contains("dist2"), ~ round(.x, 
 # t <- occ.list[[1]] %>% filter(dist2gage_m_15yr <= 15000) %>% select(COMID, gage_no_15yr) %>% distinct()
 
 #save occurrence datasets with new info
-for(i in seq_along(occ.list)) { 
-  x <- occ.list[[i]]
-  
-  if(i == 1) { taxa <- "bug"} else { taxa <- "fish" }
-  
-  write_csv(x, paste0(PATH, "/01_BioDat/occ_", taxa, "_inthigh_long_", gsub("-", "", Sys.Date()), ".csv"))
-}
-rm(x, taxa, i, sf.albers, near_gage, g.sf)
+write_csv(occ.list[[1]], paste0(PATH, "/01_BioDat/occ_bug_inthigh_long.csv"))
+write_csv(occ.list[[2]], paste0(PATH, "/01_BioDat/occ_fish_inthigh_long.csv"))
+
+rm(i, sf.albers, near_gage, g.sf)
 
 
-#some name fixes I noticed later ----
+#some name fixes I noticed later --- #did this on FEB082024, so it should be in all subsequent reruns, but prob good to double check
 bug <- read_csv(paste0(PATH, "/01_BioDat/occ_bug_inthigh_long_20240208.csv"), col_types = cols(lat = col_number(),
                                                                                                long = col_number(),
                                                                                                lat_new = col_number(),
