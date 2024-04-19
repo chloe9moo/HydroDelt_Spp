@@ -26,11 +26,11 @@ write_csv(spp.list, paste0(PATH, "/species_list.csv"))
 
 #ecoregion shapefile ----
 #ecoregions = arkansas valley, boston mountains, ouachita mountains, ozark highlands, south central plains
-eco.full <- st_read(paste0(PATH, "/02_SpatialData/us_eco_l3"), "us_eco_l3")
+eco.full <- st_read(paste0(PATH, "/02_EnvDat/us_eco_l3"), "us_eco_l3")
 eco.ih <- nhd.full %>%
   filter(US_L3NAME %in% c("Arkansas Valley", "Boston Mountains", "Ouachita Mountains", "Ozark Highlands", "South Central Plains"))
 
-st_write(eco.ih, paste0(PATH, "/02_SpatialData/ecoreg_l3_interior_highlands.shp"))
+st_write(eco.ih, paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands.shp"))
 rm(eco.full)
 
 st1 <- st_as_sf(map(database = "state", region = c('missouri', 'arkansas', 'oklahoma'), plot = FALSE, fill = TRUE)) %>%
@@ -40,13 +40,13 @@ eco.ih <- eco.ih %>%
   st_transform(., st_crs(4269)) %>%
   st_intersection(., st1)
 
-st_write(eco.ih, paste0(PATH, "/02_SpatialData/ecoreg_l3_interior_highlands_crop.shp"))
+st_write(eco.ih, paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp"))
 
 #HUC10 watersheds ----
-eco.ih <- read_sf(paste0(PATH, "/02_SpatialData/ecoreg_l3_interior_highlands_crop.shp"))
+eco.ih <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp"))
 
 #go in each folder, pull out shapefile, combine
-wbd.dir <- dir(path = paste0(PATH, "/02_SpatialData"), pattern = "WBD_", full.names = T)
+wbd.dir <- dir(path = paste0(PATH, "/02_EnvDat"), pattern = "WBD_", full.names = T)
 
 huc.full <- lapply(wbd.dir, function(dir.name) {
   h10 <- read_sf(paste0(dir.name, "/Shape"), query = "select tnmid,areasqkm,states,huc10,hutype from WBDHU10")
@@ -57,7 +57,29 @@ huc.full <- do.call(rbind, huc.full)
 
 huc.ih <- st_filter(huc.full, eco.ih)
 
-write_sf(huc.ih, paste0(PATH, "/02_SpatialData/huc10_interior_highlands_crop.shp"))
+write_sf(huc.ih, paste0(PATH, "/02_EnvDat/huc10_interior_highlands_crop.shp"))
+rm(huc.full)
+
+#HUC12 watersheds ----
+eco.ih <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp")) %>%
+  st_transform(5070)
+
+#buffer for wiggle room (to match 15k allowable range for gage x site)
+eco.ih.b <- st_buffer(eco.ih, dist = 15000) %>% st_transform(4269) 
+
+#go in each folder, pull out shapefile, combine
+wbd.dir <- dir(path = paste0(PATH, "/02_EnvDat/HUCs_NHDs"), pattern = "WBD_", full.names = T)
+
+huc.full <- lapply(wbd.dir, function(dir.name) {
+  h12 <- read_sf(paste0(dir.name, "/Shape"), query = "select tnmid,areasqkm,states,huc12,hutype from WBDHU12")
+  return(h12)
+})
+
+huc.full <- do.call(rbind, huc.full)
+
+huc.ih <- st_filter(huc.full, eco.ih.b)
+
+write_sf(huc.ih, paste0(PATH, "/02_EnvDat/study_extent_shp/huc12_interior_highlands_crop.shp"))
 rm(huc.full)
 
 #nhd in highlands ----
@@ -66,9 +88,9 @@ rm(huc.full)
 
 # sites as points ----
 spp.l <- read_csv(paste0(PATH, "/species_list.csv"))
-fish.dat <- read_csv(paste0(PATH, "/01_Data/ARMOOK_Fishes_bysite23a_StreamCat_Flow_Full_15km.csv")) %>% select(-c('...1', etheostoma.zonale, notropis.boops)) %>%
+fish.dat <- read_csv(paste0(PATH, "/01_BioDat/ARMOOK_Fishes_bysite23a_StreamCat_Flow_Full_15km.csv")) %>% select(-c('...1', etheostoma.zonale, notropis.boops)) %>%
   st_as_sf(., coords = c("site_x", "site_y"), crs = 26915) #UTM zone 15
-bug.dat <- read_csv(paste0(PATH, "/01_Data/BenthicInsect_23_StreamCat_Flow_Full_15km.csv")) %>%
+bug.dat <- read_csv(paste0(PATH, "/01_BioDat/BenthicInsect_23_StreamCat_Flow_Full_15km.csv")) %>%
   st_as_sf(., coords = c("site_x", "site_y"), crs = 4269)
 
 dat.list <- list(fish.dat, bug.dat)
@@ -97,13 +119,13 @@ g.info <- g.info %>%
   distinct()
 
 g.rich <- left_join(g.rich, g.info, by = c("STAID"="site_no"))
-write_csv(g.rich, paste0(PATH, "/01_Data/USGS_gage_locations.csv"))
+write_csv(g.rich, paste0(PATH, "/01_BioDat/USGS_gage_locations.csv"))
 
 #study extent map ----
 states <- st_as_sf(map(database = "state", region = c('missouri', 'arkansas', 'oklahoma'), plot = FALSE, fill = TRUE))
-eco.ih <- st_read(paste0(PATH, "/02_SpatialData/ecoreg_l3_interior_highlands_crop.shp"))
-huc.ih <- st_read(paste0(PATH, "/02_SpatialData/huc10_interior_highlands_crop.shp"))
-g.rich <- read_csv(paste0(PATH, "/01_Data/USGS_gage_locations.csv")) %>% st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269)
+eco.ih <- st_read(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp"))
+huc.ih <- st_read(paste0(PATH, "/02_EnvDat/huc10_interior_highlands_crop.shp"))
+g.rich <- read_csv(paste0(PATH, "/01_BioDat/USGS_gage_locations.csv")) %>% st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269)
 
 ggplot() +
   geom_sf(data = states, fill = "lightgray", color = "darkgray", lwd = 1.2) +
