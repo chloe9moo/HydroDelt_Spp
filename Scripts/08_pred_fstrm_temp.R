@@ -181,6 +181,57 @@ rm(site_no, lm_site_no, lm, sub.a_temp, lm.w_temp)
 
 write_csv(pred_temp, paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly.csv"))
 
+#predict stream temp for change over time ----
+#monthly stream temp at each site from 1923 to 2022
+hit.info <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_info_with_strm_temp_info.csv"))
+r_list <- readRDS(paste0(PATH, "/02_EnvDat/fine_scale_temp_regressions.rds"))
+
+##predict stream temp using nearest gage
+pred_temp <- data.frame()
+for(i in seq_len(nrow(hit.info))) {
+  
+  site_no <- hit.info[i, ]$site_no #gage of interest
+  lm_site_no <- hit.info[i, ]$strm_lm_site_no #matched gage
+  
+  lm <- r_list[names(r_list) == lm_site_no][[1]] #regression from nearest gage
+  
+  sub.a_temp <- a_temp[a_temp$site_no == site_no, ] %>%
+    mutate(date = as.Date(paste(year, month, "1", sep = "-"))) %>%
+    filter(date <= as.Date("2022-01-31") & date >= as.Date("1923-01-01")) %>%
+    arrange(date)
+  
+  sub.a_temp$water_temp <- predict(lm, newdata = sub.a_temp["air_temp"]) #predict stream temp
+  
+  sub.a_temp$lm_site_no <- lm_site_no #save site model is based on (JIC)
+  
+  sub.a_temp$temp_type <- "predicted" #for comparisons later (JIC)
+  
+  sub.a_temp <- relocate(sub.a_temp, site_no, date, Lat, Long, water_temp, air_temp)
+  
+  if(site_no == lm_site_no) { #modify data if observed water temp is available
+    
+    lm.w_temp <- c_temp[[lm_site_no]] %>% #get dates of water temp from regression
+      mutate(date = as.Date(paste(year, month, "1", sep = "-")))
+    
+    sub.a_temp <- sub.a_temp %>% 
+      left_join(., lm.w_temp %>% 
+                  select(date, water_temp) %>% 
+                  rename(orig_water_temp = water_temp)) %>%
+      mutate(temp_type = case_when(!is.na(orig_water_temp) ~ "observed",
+                                   T ~ temp_type),
+             water_temp = case_when(is.na(orig_water_temp) ~ water_temp,
+                                    T ~ orig_water_temp)) %>%
+      select(-orig_water_temp)
+    
+  }
+  
+  pred_temp <- bind_rows(pred_temp, sub.a_temp)
+  
+}
+rm(site_no, lm_site_no, lm, sub.a_temp, lm.w_temp)
+
+write_csv(pred_temp, paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly_envchange.csv"))
+
 # summarize stream temp values ----
 #occ data goes from 1900 to 2022
 pred_temp <- read_csv(paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly.csv"))

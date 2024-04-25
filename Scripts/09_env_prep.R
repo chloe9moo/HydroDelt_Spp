@@ -5,11 +5,24 @@ options(readr.show_col_types = FALSE, dplyr.summarise.inform=F)
 
 PATH <- getwd()
 
-#load in sites for attaching env var data
+#set which sections to run ----
+get_stream_cat <- FALSE; get_hydro_alt <- FALSE; get_adj_hit <- FALSE
+get_occ_date_range <- FALSE
+get_huc_lvl_air_temp <- FALSE; summarize_air_temp <- FALSE
+download_prism_ppt <- FALSE; clip_prism_ppt <- FALSE; get_huc_lvl_ppt <- FALSE; summarize_ppt <- FALSE
+summarize_stream_temp <- FALSE
+download_nlcd <- TRUE
+
+#load in sites for summarizing env var data
 occ.sites <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
 occ.sites <- lapply(occ.sites, read_csv, col_types = cols(lat = col_number(),
                                                           long = col_number(),
                                                           .default = "c"))
+
+#get gage nos
+gage_ids <- lapply(occ.sites, function(x) select(x, gage_no_15yr))
+gage_ids <- bind_rows(gage_ids)
+gage_ids <- unique(gage_ids$gage_no_15yr)
 
 #get COMIDs (needed to obtain some env vars)
 comids <- lapply(occ.sites, function(x) select(x, COMID))
@@ -17,6 +30,8 @@ comids <- bind_rows(comids)
 comids <- unique(comids$COMID)
 
 # StreamCat Vars ----
+if(get_stream_cat) {
+  
 library(StreamCatTools)
 
 #select variables to pull
@@ -76,42 +91,182 @@ write_csv(stream_cat_sum, file = paste0(PATH, "/02_EnvDat/StreamCat/stream_cat_v
 
 rm(sc.name.df, stream_cat, stream_cat_sum, i, m.c, metric.v)
 
+}
+
+# Hydro Alt dataset ----
+if(get_hydro_alt) {
+  
+#(McManamay et al. 2022)
+h.alt <- read_csv(paste0(PATH, "/02_EnvDat/hydro_alt_disturb/predicted_alteration_US_model.csv"), col_types = cols(COMID = col_character(),
+                                                                                                                   .default = "n"))
+h.alt <- h.alt %>% select(COMID, contains("pn"))
+
+#get COMIDs (needed to obtain some env vars)
+h.alt.sub <- lapply(occ.sites, function(x) select(x, COMID, long, lat))
+h.alt.sub <- bind_rows(h.alt.sub) %>% distinct()
+
+h.alt.sub <- left_join(h.alt.sub, h.alt)
+
+#fix NAs (no COMID in hydro alt dataset)
+h.alt.sub <- h.alt.sub %>% mutate(index = row_number())
+
+na.h.alt <- filter(h.alt.sub, is.na(pnSeasonal)) %>%
+  st_as_sf(., coords = c("long", "lat"), crs = 4269, remove = FALSE) %>%
+  st_transform(5070)
+na.coms <- na.h.alt$COMID
+
+nhd <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/nhd_clip_state_eco.shp")) %>% #nhd streams prev. clipped to region (good to use clipped because of MEM usage)
+  st_transform(5070)
+
+# Use a while loop to repeat na replacement until no NAs (search for nearest stream with h.alt data)
+while (nrow(na.h.alt) != 0) {
+  message(nrow(na.h.alt), " streams with no matching alteration stream ID...")
+  
+  #redo stream snap to find next nearest stream
+  nhd.na <- filter(nhd, !COMID %in% na.coms) #filter out NA comids
+  
+  nhd_near <- st_nearest_feature(na.h.alt, nhd.na, check_crs = TRUE) #identify nearest nhd stream
+  
+  nhd_near <- nhd.na[nhd_near, ] #pull sites
+  
+  na.h.alt$COMID_altNA <- as.character(nhd_near$COMID) #add COMID to data
+  
+  dist <- as.vector(st_distance(st_transform(na.h.alt, 5070), nhd_near, by_element = TRUE)) #get distance to nearest nhd strm + add to dataset
+  na.h.alt$dist2strm_m_nhd_NA <- round(dist, 3)
+  
+  #rejoin w/ alt data and find if still NAs 
+  tmp.na <- na.h.alt %>% 
+    select(!contains(names(h.alt)), contains("COMID")) %>% 
+    st_drop_geometry() %>%
+    left_join(h.alt, by = c("COMID_altNA" = "COMID"))
+  h.alt.sub <- bind_rows(filter(h.alt.sub, !index %in% tmp.na$index), tmp.na)
+  
+  #check for NAs still
+  na.h.alt <- filter(h.alt.sub, is.na(pnSeasonal)) %>%
+    st_as_sf(., coords = c("long", "lat"), crs = 4269, remove = FALSE) %>%
+    st_transform(5070)
+  na.coms <- c(na.coms, na.h.alt$COMID_altNA)
+  
+}
+
+h.alt.sub <- h.alt.sub %>% 
+  select(-index) %>%
+  mutate(COMID_new = case_when(is.na(COMID_altNA) ~ COMID, 
+                               T ~ COMID_altNA),
+         COMID_orig = COMID) %>%
+  select(-COMID, -COMID_altNA) %>%
+  rename(COMID = COMID_new) %>%
+  relocate(contains("COMID"), contains("dist"))
+
+write_csv(h.alt.sub, paste0(PATH, "/02_EnvDat/hydrologic_alteration_all_sites.csv"))
+
+rm(h.alt, h.alt.sub, nhd.na, na.coms, na.h.alt, tmp.na, dist, nhd_near, nhd)
+
+}
+
+#Adjusted HIT metrics ----
+if(get_adj_hit) {
+  
+#load in hit metrics + gage info
+hit <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240130.csv"))
+g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv")) %>%
+  select(-c(station_nm, site_tp_cd, coord_acy_cd, dec_coord_datum_cd, alt_va, alt_acy_va, alt_datum_cd, data_type_cd,
+            parm_cd, stat_cd, ts_id, count_nu, period, int_high))
+
+#intermittent streams and streams with zero flow days
+adj.sites <- data.frame(site_no = hit$site_no, is_intermit = rep(NA, nrow(hit)), is_zero_flw = rep(NA, nrow(hit)), prop_zero_flw = rep(NA, nrow(hit)))
+
+for(i in seq_len(nrow(adj.sites))) {
+  site <- adj.sites$site_no[i]
+  
+  #check if flow type is intermittent
+  adj.sites[i, ]$is_intermit <- g.info[g.info$site_no == site, ]$flw_type == "Int"
+  
+  #check for zero flow days
+  #original raw flow dat
+  f <- file.path(PATH, "02_EnvDat/raw_daily_flow", 
+                 paste0(site, ifelse(file.exists(file.path(PATH, "02_EnvDat/raw_daily_flow", paste0(site, "_long.csv"))), #check if clipped file exists
+                                     "_long.csv", ".csv")))
+  q <- read_csv(f, col_types = cols(site_no = col_character(), Date = col_date(), X_00060_00003 = col_number())) %>%
+    mutate(month = format(Date, "%m"), day = format(Date, "%d"))
+  
+  if(!any(names(q) %in% "X_00060_00003")) { next } #skip those that didn't have the right flow type
+  
+  adj.sites[i, ]$is_zero_flw <- any(q$X_00060_00003 == 0, na.rm = TRUE) #any zero flw days?
+  
+  adj.sites[i, ]$prop_zero_flw <- round((sum(q$X_00060_00003 == 0, na.rm = TRUE) / nrow(q)) * 100, 3) #how many zero flow days?
+  
+  rm(f, q)
+}
+
+rm(i, site)
+
+#set up hit metrics, keep adjusted for appropriate sites in df
+adj_vars <- gsub("_adj", "", names(hit)[grepl("_adj", names(hit))])
+adj.sites <- filter(adj.sites, is_intermit == TRUE | is_zero_flw == TRUE)
+
+new.hit <- hit[hit$site_no %in% adj.sites$site_no, ] %>%
+  select(-all_of(adj_vars)) %>% #remove unadjusted version of variables
+  rename_with(~gsub("_adj", "", .x))
+
+hit <- bind_rows(
+  hit[!hit$site_no %in% new.hit$site_no, names(hit)[!grepl("_adj", names(hit))]],
+  new.hit
+)
+
+#save
+write_csv(hit, paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_adjustments_applied.csv"))
+
+rm(new.hit, adj.sites, adj_vars, g.info, hit)
+
+}
+
 # Env Change Over Time variables ----
-#obs - exp / exp, where exp is 'normal' or average across full set of years (??), obs is monthly/seasonal avg, then average those values (??)
-#sum of months(obs - exp / exp) = seasonality index per McManamay et al. 2022 (hydro alt dataset)
-
 ## prep ----
-#get date range of occurrence data
-# load in dat with dates (if available)
-# file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "inthigh_long", full.names = TRUE)
-# occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
-#                                                          long = col_number(),
-#                                                          lat_new = col_number(),
-#                                                          long_new = col_number(),
-#                                                          taxa_count = col_number(),
-#                                                          .default = "c"))
-# 
-# lapply(occ.list, function(x) {
-#   #filter to match wide data parameters
-#   x <- x %>%
-#     filter(dist2gage_m_15yr <= 15000 & dist2strm_m_flw <= 5000) %>% #make sure within 15km of a gage + 5 km classified flow line
-#     filter(!gage_no_15yr %in% c("06906800", "07020550", "07332500"))
-#   #combine all dates
-#   all.dates <- c(x$date_min, x$date_max, x$date)
-#   all.dates <- all.dates[!is.na(all.dates)]
-# 
-#   paste0(min(all.dates), " to ", max(all.dates))
-#   # return(all.dates)
-# })
+### get date range of occurrence data ----
+if(get_occ_date_range) {
+ 
+  # load in dat with dates (if available)
+  file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "inthigh_long", full.names = TRUE)
+  occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
+                                                           long = col_number(),
+                                                           lat_new = col_number(),
+                                                           long_new = col_number(),
+                                                           taxa_count = col_number(),
+                                                           .default = "c"))
+  
+  lapply(occ.list, function(x) {
+    #filter to match wide data parameters
+    x <- x %>%
+      filter(dist2gage_m_15yr <= 15000 & dist2strm_m_flw <= 5000) %>% #make sure within 15km of a gage + 5 km classified flow line
+      filter(!gage_no_15yr %in% c("06906800", "07020550", "07332500"))
+    #combine all dates
+    all.dates <- c(x$date_min, x$date_max, x$date)
+    all.dates <- all.dates[!is.na(all.dates)]
+    
+    paste0(min(all.dates), " to ", max(all.dates))
+    # return(all.dates)
+  })
+  
+  # fish.dates <- all.dates[[2]]
+  # fish.dates <- as.Date(fish.dates)
+  #based on looking into the data a bit more, the ADEQ sites with a date of 1900 are likely wrong (looked at ADEQ website)
+  
+  #bugs: Aug. 1964 to Jan. 2022
+  #fish: Jan. 1923 to Jun. 2021
+   
+}
 
-# fish.dates <- all.dates[[2]]
-# fish.dates <- as.Date(fish.dates)
-#based on looking into the data a bit more, the ADEQ sites with a date of 1900 are likely wrong (looked at ADEQ website)
+##get bounding box for raster clipping ----
+coords <- lapply(occ.sites, function(x) select(x, long, lat))
+coords <- bind_rows(coords) %>% distinct()
+coords <- st_as_sf(coords, coords = c("long", "lat"), crs = 4269)
+coords <- st_bbox(coords)
+#add some wiggle room
+coords[c("xmax", "ymax")] <- coords[c("xmax", "ymax")] + 0.5
+coords[c("xmin", "ymin")] <- coords[c("xmin", "ymin")] - 0.5
 
-#bugs: Aug. 1964 to Jan. 2022
-#fish: Jan. 1923 to Jun. 2021
-
-#get watersheds
+### get watersheds x nhd strms ----
 huc <- st_read(paste0(PATH, "/02_EnvDat/study_extent_shp/huc12_interior_highlands_crop.shp"))
 
 #pair watersheds w/ comids
@@ -183,67 +338,37 @@ huc_ids <- unique(huc_ids)
 
 huc <- huc[huc$huc12 %in% huc_ids, ]
 
-## air temp change ----
-##note: prism data across almost all years were previously downloaded and cropped in 07_get_fstrm_temp_data.R
-#get average temp within each watershed for each year of interest (Jan 1923 to Jan 2022)
-prism_files <- list.files(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters"), full.names = TRUE)
-
-a_temp <- data.frame()
-a_temp <- mclapply(prism_files, mc.cores = 8, function(x) { #~ 18 GB MEM at max using 8 cores
-  date <-  gsub(".*?(\\d{6}).*", "\\1", x)
-  
-  if(nchar(date) != 6) { return(NULL) }
-  
-  pr1 <- rast(x) #load in clipped raster
-  
-  #extract temperature values at all gage sites
-  a_temp1 <- exact_extract(pr1, huc, fun = 'weighted_mean', weights = 'area', force_df = TRUE, progress = FALSE) #exactextractr::exact_extract is faster than terra::extract
-  
-  names(a_temp1) <- "air_temp"
-  #add hucID and date to df
-  a_temp1$year <- gsub("^(.{4}).*", "\\1", date)
-  a_temp1$month <- gsub(".*(.{2})$", "\\1", date)
-  a_temp1 <- bind_cols(st_drop_geometry(huc[, "huc12"]), a_temp1)
-  
-  return(a_temp1)
-})
-
-a_temp <- bind_rows(a_temp)
-a_temp <- a_temp %>% arrange(huc12, year, month)
-
-write_csv(a_temp, paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_huc_lvl.csv"))
-
-#calculate change
-a_temp <- read_csv(paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_huc_lvl.csv"))
-
-#bugs: Aug. 1964 to Jan. 2022
-#fish: Jan. 1923 to Jun. 2021
-
-##annual deficit
+### functions ----
 calc_var_diff <- function(x, #variable dataframe that has, at minimum, env variable + time
-                          var2grp = c("huc12", "year", "season"), #group levels, right now this only works across years, not within a single year
+                          env_var = "air_temp", #column name for variable of interest
+                          site_var = "site_no", #column name for individual sites to group by
+                          var2grp = c("year", "season"), #group levels, right now this only works across years, not within a single year
                           norm_comp = TRUE, #calc deficit from normal, departure from normal, percent of normal (all averaged over time)
                           pct_change = TRUE, #average percent change across time for each lowest group
                           delta_var = TRUE, #difference in var from start to end of period, grouped by N years
                           num_yr_start_end = 5, #for difference from start to end of period, how many years to pull from
                           c_var_diff = TRUE, #cumulative change over length of time (essentially length of the trend line)
                           growth_rate = TRUE #growth rate calculated from decomposed time series, not grouped by season or anything
-                          ) {
-  # x <- air_temp #to test
+) {
+  x <- precip.sub #to test
+  # add in site id column for grouping purposes
+  var2grp <- c(site_var, var2grp)
+  
+  #set up dataframe for returning results
   all_res <- x[, names(x) %in% var2grp[!grepl("year", var2grp)]]
   all_res <- distinct(all_res)
   
   if(norm_comp) {
     #get normal = average value over all years ----
-    norm <- x %>%
+    normal <- x %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      summarise(norm = mean(air_temp))
+      summarise(norm = mean(.data[[env_var]]))
     
     obs <- x %>%
       group_by(across(all_of(var2grp))) %>% 
-      summarise(obs = mean(air_temp)) %>%
+      summarise(obs = mean(.data[[env_var]])) %>%
       ungroup() %>%
-      left_join(., norm, by = names(.)[names(.) %in% names(norm)])
+      left_join(., normal, by = names(.)[names(.) %in% names(normal)])
     
     #within years deficits ----
     def <- obs %>%
@@ -252,7 +377,7 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
       summarise(norm_def = mean(def)) %>%
       ungroup()
     
-    #departure from normal (obs - norm) ----
+    #departure from normal (obs - normal) ----
     depart <- obs %>%
       mutate(depart = obs - norm) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
@@ -272,79 +397,81 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
       left_join(., pct, by = names(.)[names(.) %in% names(pct)])
   }
   
-  
   #avg percent change ----
   if(pct_change) {
     mn.pch <- x %>% 
       group_by(across(all_of(var2grp))) %>%
-      summarise(mn_temp = mean(air_temp)) %>%
+      summarise(mn_var = mean(.data[[env_var]])) %>%
       arrange(across(all_of(var2grp))) %>% 
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      mutate(pct_ch = (mn_temp / lag(mn_temp) - 1) * 100,
-             pct_ch = ifelse(mn_temp > lag(mn_temp), abs(pct_ch), pct_ch)) %>% #second line to handle transitions from neg. to pos.
+      mutate(pct_ch = (mn_var / lag(mn_var) - 1) * 100,
+             pct_ch = ifelse(mn_var > lag(mn_var), abs(pct_ch), pct_ch)) %>% #second line to handle transitions from neg. to pos.
       summarise(mn_pch = mean(pct_ch, na.rm = TRUE))
     
     all_res <- all_res %>% left_join(., mn.pch, by = names(.)[names(.) %in% names(mn.pch)])
   }
-
+  
   
   #diff between start and end of sample period ----
   if(delta_var) {
     dates <- unique(x$year)
     dates <- sort(dates)
     
-    d_temp <- x %>%
+    d_var <- x %>%
       mutate(time_point = case_when(year %in% head(dates, num_yr_start_end) ~ "first",
                                     year %in% tail(dates, num_yr_start_end) ~ "last")) %>%
       filter(!is.na(time_point)) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)])), time_point) %>%
-      summarise(avg_temp = mean(air_temp, na.rm = TRUE)) %>%
+      summarise(avg_var = mean(.data[[env_var]], na.rm = TRUE)) %>%
       arrange(across(all_of(var2grp[!grepl("year", var2grp)])), time_point) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      mutate(delta_temp = avg_temp - lag(avg_temp)) %>%
-      select(any_of(var2grp), delta_temp) %>%
-      filter(!is.na(delta_temp))
+      mutate(delta_var = avg_var - lag(avg_var)) %>%
+      select(any_of(var2grp), delta_var) %>%
+      filter(!is.na(delta_var))
     
-    all_res <- all_res %>% left_join(., d_temp,  by = names(.)[names(.) %in% names(d_temp)])
+    all_res <- all_res %>% left_join(., d_var,  by = names(.)[names(.) %in% names(d_var)])
   }
   
   
   #cumulative diff. of over time ----
   if(c_var_diff) {
-    c_temp <- x %>%
+    c_var <- x %>%
       group_by(across(all_of(var2grp))) %>%
-      summarise(ssn_temp = mean(air_temp)) %>% #one seasonal value per year
+      summarise(ssn_var = mean(.data[[env_var]])) %>% #one seasonal value per year
       arrange(across(all_of(var2grp))) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      mutate(cdelt_temp = ssn_temp - lag(ssn_temp)) %>%
-      summarise(cdelt_temp = sum(abs(cdelt_temp), na.rm = TRUE))
+      mutate(cdelt_var = ssn_var - lag(ssn_var)) %>%
+      summarise(cdelt_var = sum(abs(cdelt_var), na.rm = TRUE))
     
-    all_res <- all_res %>% left_join(., c_temp,  by = names(.)[names(.) %in% names(c_temp)])
+    all_res <- all_res %>% left_join(., c_var,  by = names(.)[names(.) %in% names(c_var)])
   }
   
   #ratio of delta var : cum. var ----
   if(all(c(delta_var, c_var_diff))) {
     all_res <- all_res %>%
-      mutate(change_ratio = cdelt_temp / delta_temp)
+      mutate(change_ratio = cdelt_var / delta_var)
   }
   
   #growth rate from decomposed time series ----
   if(growth_rate) {
-    ts.l <- split(x, x$huc12)
+    ts.l <- split(x, x[[site_var]])
     
     ts.l <- lapply(ts.l, function(y) {
       y <- y %>% arrange(date)
       
-      ts.gr <- ts(y$air_temp, start = c(y[1, ]$year, y[1, ]$month), end = c(y[nrow(y), ]$year, y[nrow(y), ]$month), frequency = 12)
+      ts.gr <- ts(y[[env_var]], start = c(y[1, ]$year, y[1, ]$month), end = c(y[nrow(y), ]$year, y[nrow(y), ]$month), frequency = 12)
       
       m <- decompose(ts.gr, type = "multiplicative")
+      m <- decompose(ts.gr, type = "additive")
       trend <- na.omit(m$trend)
       trend <- diff(log(trend))
       
       #avg percent growth rate
       pct.avg.gr <- mean(trend) * 100
       
-      res <- data.frame(huc12 = unique(y$huc12), pct_avg_gr = pct.avg.gr)
+      res <- data.frame(site_var = unique(y[[site_var]]), pct_avg_gr = pct.avg.gr)
+      
+      names(res)[names(res) == "site_var"] <- site_var
       
       return(res)
     })
@@ -353,83 +480,439 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
     
     all_res <- all_res %>% left_join(., ts.l,  by = names(.)[names(.) %in% names(ts.l)])
   }
-
+  
+  names(all_res)[!names(all_res) %in% var2grp & !grepl("var", names(all_res))] <- paste0(names(all_res)[!names(all_res) %in% var2grp & !grepl("var", names(all_res))], "_", env_var)
+  names(all_res)[grepl("var", names(all_res))] <- sub("var", env_var, names(all_res)[grepl("var", names(all_res))])
   
   return(all_res)
+  
+  #for testing:
+  # rm(y, ts.gr, m, all_res, c_var, d_var, def, depart, mn.pch, normal, obs, pct, ts.l, x, c_var_diff, dates, delta_var, env_var, growth_rate, norm_comp, num_yr_start_end, pct_change, var2grp)
 }
 
-summarize_temp_delt <- function(air_temp = a_temp, #temperature df just created, with HUC IDs and year x month
-                                date_min = as.Date("1964-08-01"), #set taxa date min and max for filtering air temperature
-                                date_max = as.Date("2022-01-31"),
-                                seasonal = TRUE
-) {
+## air temp change ----
+##note: prism data across almost all years were previously downloaded and cropped in 07_get_fstrm_temp_data.R
+### summarize air temp within HUCs (Jan 1923 to Jan 2022) ----
+if(get_huc_lvl_air_temp) {
   
-  #filter temperature to desired date range
-  air_temp <- air_temp %>%
-    mutate(date = as.Date(paste(year, month, "01", sep = "-")),
-           season = case_when(month %in% c("12", "01", "02") ~ "winter",
-                              month %in% c("03", "04", "05") ~ "spring",
-                              month %in% c("06", "07", "08") ~ "summer",
-                              month %in% c("09", "10", "11") ~ "fall")) %>%
-    filter(date >= date_min & date <= date_max)
+  prism_files <- list.files(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters"), full.names = TRUE)
+  prism_files <- prism_files[grepl("tmean", prism_files)]
   
-  #seasonal differences
-  if(seasonal){
-    output <- calc_var_diff(air_temp, var2grp = c("huc12", "year", "season"),
-                            norm_comp = TRUE, pct_change = TRUE, 
-                            delta_var = TRUE, num_yr_start_end = 5,
-                            c_var_diff = TRUE, growth_rate = TRUE)
-  }
-
-  ssn <- pivot_wider(ssn, names_from = season, values_from = c(norm_def, norm_depart, norm_pct))
+  a_temp <- data.frame()
+  a_temp <- mclapply(prism_files, mc.cores = 8, function(x) { #~ 18 GB MEM at max using 8 cores
+    date <-  gsub(".*?(\\d{6}).*", "\\1", x)
+    
+    if(nchar(date) != 6) { return(NULL) }
+    
+    pr1 <- rast(x) #load in clipped raster
+    
+    #extract temperature values at all gage sites
+    a_temp1 <- exact_extract(pr1, huc, fun = 'weighted_mean', weights = 'area', force_df = TRUE, progress = FALSE) #exactextractr::exact_extract is faster than terra::extract
+    
+    names(a_temp1) <- "air_temp"
+    #add hucID and date to df
+    a_temp1$year <- gsub("^(.{4}).*", "\\1", date)
+    a_temp1$month <- gsub(".*(.{2})$", "\\1", date)
+    a_temp1 <- bind_cols(st_drop_geometry(huc[, "huc12"]), a_temp1)
+    
+    return(a_temp1)
+  })
   
-  TO DO:
-    CHECK FUNCTION WORKS, FROM FRESH ENVIRONMENT (seems to work fine)
-    RUN FOR BOTH TAXA, SAVE THE RESULTS
-    UPDATE CODE TO WORK WITH OTHER VARIABLES (E.G. DO PRECIP NEXT)
-
+  a_temp <- bind_rows(a_temp)
+  a_temp <- a_temp %>% arrange(huc12, year, month)
+  
+  write_csv(a_temp, paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_huc_lvl.csv"))
+  
 }
+
+###taxa specific delta ----
+if(summarize_air_temp) {
+  
+a_temp <- read_csv(paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_huc_lvl.csv")) %>%
+  #for seasonal trends:
+  mutate(date = as.Date(paste(year, month, "01", sep = "-")),
+         season = case_when(month %in% c("12", "01", "02") ~ "winter",
+                            month %in% c("03", "04", "05") ~ "spring",
+                            month %in% c("06", "07", "08") ~ "summer",
+                            month %in% c("09", "10", "11") ~ "fall"))
+
+####bugs: Aug. 1964 to Jan. 2022 ----
+air_temp <- a_temp %>%
+    filter(date >= as.Date("1964-08-01") & date <= as.Date("2022-01-31"))
+
+bugs <- calc_var_diff(air_temp, env_var = "air_temp", site_var = "huc12",
+                      var2grp = c("year", "season"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+bugs <- bugs %>%
+  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
+
+write_csv(bugs, paste0(PATH, "/02_EnvDat/air_temp_temporal_change_bugs.csv"))
+  
+###fish: Jan. 1923 to Jun. 2021 ----
+air_temp <- a_temp %>%
+  filter(date >= as.Date("1923-01-01") & date <= as.Date("2021-06-30"))
+
+fish <- calc_var_diff(air_temp, env_var = "air_temp", site_var = "huc12",
+                      var2grp = c("year", "season"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+fish <- fish %>%
+  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
+
+write_csv(fish, paste0(PATH, "/02_EnvDat/air_temp_temporal_change_fish.csv"))
+
+fish <- fish %>% arrange(huc12, season)
+bugs <- bugs %>% arrange(huc12, season)
+
+### plots ----
+# f.cor <- cor(bugs[, -c(1,2)])
+# corrplot::corrplot(f.cor, method = "number")
+# 
+# ggplot() +
+#   geom_point(data = fish, aes(delta_air_temp, cdelt_air_temp, color = season)) +
+#   theme_minimal()
+# 
+# ggplot() +
+#   geom_point(data = bugs, aes(delta_air_temp, cdelt_air_temp, color = season)) +
+#   theme_minimal()
+# 
+# air_temp %>%
+#   group_by(date, season) %>%
+#   summarise(mn_temp = mean(air_temp)) %>%
+#   ggplot() +
+#   geom_line(aes(date, mn_temp, color = season)) +
+#   theme_minimal()
 
 #comparing diff change ratios
-air_temp %>%
-  #order is high neg, high pos, middle value
-  filter((huc12 == "071401020407" & season == "winter") | (huc12 == "102901070301" & season == "winter") | (huc12 == "111402010501" & season == "winter")) %>%
-  group_by(huc12) %>%
-  arrange(date) %>%
-  mutate(scaled_var = (air_temp - mean(air_temp)) / sd(air_temp)) %>%
-  ggplot(aes(date, scaled_var)) +
-  geom_line(aes(color = huc12), alpha = 0.3) +
-  geom_smooth(method = "loess", span = 0.7, aes(color = huc12)) + #change span to edit smoothing amount (higher is more)
-  theme_classic()
+# air_temp %>%
+#   #order is high neg, high pos, middle value
+#   filter((huc12 == "071401020407" & season == "winter") | (huc12 == "102901070301" & season == "winter") | (huc12 == "111402010501" & season == "winter")) %>%
+#   group_by(huc12) %>%
+#   arrange(date) %>%
+#   mutate(scaled_var = (air_temp - mean(air_temp)) / sd(air_temp)) %>%
+#   ggplot(aes(date, scaled_var)) +
+#   geom_line(aes(color = huc12), alpha = 0.3) +
+#   geom_smooth(method = "loess", span = 0.7, aes(color = huc12)) + #change span to edit smoothing amount (higher is more)
+#   theme_classic()
 
+rm(a_temp, air_temp, bugs, f.cor, fish, output, date_min, date_max)
 
+} ## end air temp section ##
 
-#from NOAA - https://water.weather.gov/precip/ (some ideas here)
-#precip deficit (???)
-#departure from normal? (not sure how this would work if we need 1 value for each site)
-#average departure from normal? could also do amount of variation??
+## precipitation ----
+### download data ----
+if(download_prism_ppt) {
+  
+  library(prism)
+  prism_set_dl_dir(paste0(PATH, "/02_EnvDat/raw_air_temp/prism"))
+  
+  get_prism_monthlys(type = "ppt",
+                     years = 1923:2022,
+                     mon = seq(1, 12),
+                     keepZip = TRUE, #can remove the unzipped files after clipping
+                     keep_pre81_months = TRUE)
+  
+}
 
+### clip prism data to region ----
+if(clip_prism_ppt) {
+ 
+  prism.list <- list.dirs(paste0(PATH, "/02_EnvDat/raw_air_temp/prism"), full.names = FALSE, recursive = FALSE)
+  prism.list <- prism.list[grepl("ppt", prism.list)]
+  
+  for(i in seq_along(prism.list)) {
+    
+    rast_name <- prism.list[i]
+    
+    if(file.exists(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters/", rast_name, "_clipped.tif"))) { next }
+    
+    #load in raster
+    prism.rast <- rast(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/", rast_name, "/", rast_name, ".bil"))
+    #clip to extent of coordinates
+    prism.c <- terra::crop(prism.rast, ext(coords))
+    #save to new folder
+    writeRaster(prism.c, filename = paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters/", rast_name, "_clipped.tif"), overwrite = FALSE) #using .bil to match
+    
+    message(round(i/length(prism.list)*100, digits = 2), "% complete")
+    
+  }
+  
+  rm(prism.c, prism.rast, prism_files, prism.list, rast_name, i)
+  
+}
 
-#stream temp change
+### avg monthly precip in occupied HUCs ----
+if(get_huc_lvl_ppt) {
 
-#precip change
+prism_files <- list.files(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters"), full.names = TRUE)
+prism_files <- prism_files[grepl("ppt", prism_files)]
 
+precip <- data.frame()
+precip <- mclapply(prism_files, mc.cores = 8, function(x) { #~ 18 GB MEM at max using 8 cores
+  date <- gsub(".*?(\\d{6}).*", "\\1", x)
+  
+  if(nchar(date) != 6) { return(NULL) }
+  
+  pr1 <- rast(x) #load in clipped raster
+  
+  #extract temperature values at all gage sites
+  precip1 <- exact_extract(pr1, huc, fun = 'weighted_mean', weights = 'area', force_df = TRUE, progress = FALSE) #exactextractr::exact_extract is faster than terra::extract
+  
+  names(precip1) <- "precip"
+  #add hucID and date to df
+  precip1$year <- gsub("^(.{4}).*", "\\1", date)
+  precip1$month <- gsub(".*(.{2})$", "\\1", date)
+  precip1 <- bind_cols(st_drop_geometry(huc[, "huc12"]), precip1)
+  
+  return(precip1)
+})
 
+precip <- bind_rows(precip)
+precip <- precip %>% arrange(huc12, year, month)
 
-#land cover change
+write_csv(precip, paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_precip_at_huc_lvl.csv"))
 
+}
+
+###taxa specific delta ----
+if(summarize_ppt) {
+  
+precip <- read_csv(paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_precip_at_huc_lvl.csv")) %>%
+  #for seasonal trends:
+  mutate(date = as.Date(paste(year, month, "01", sep = "-")),
+         season = case_when(month %in% c("12", "01", "02") ~ "winter",
+                            month %in% c("03", "04", "05") ~ "spring",
+                            month %in% c("06", "07", "08") ~ "summer",
+                            month %in% c("09", "10", "11") ~ "fall"))
+
+####bugs: Aug. 1964 to Jan. 2022 ----
+precip.sub <- precip %>%
+  filter(date >= as.Date("1964-08-01") & date <= as.Date("2022-01-31"))
+
+bugs <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
+                      var2grp = c("year", "season"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_ssn_temporal_change_bugs.csv"))
+
+bugs <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
+                      var2grp = c("year"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_all_temporal_change_bugs.csv"))
+
+###fish: Jan. 1923 to Jun. 2021 ----
+precip.sub <- precip %>%
+  filter(date >= as.Date("1923-01-01") & date <= as.Date("2021-06-30"))
+
+fish <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
+                      var2grp = c("year", "season"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+write_csv(fish, paste0(PATH, "/02_EnvDat/precip_ssn_temporal_change_fish.csv"))
+
+fish <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
+                      var2grp = c("year"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+write_csv(fish, paste0(PATH, "/02_EnvDat/precip_all_temporal_change_fish.csv"))
+
+### plots ----
+# ggplot(data = precip.sub %>% filter(huc12 == "111401090801" & season == "summer")) +
+#   geom_line(aes(date, precip, color = season))
+# 
+# f.cor <- cor(fish[, -c(1,2)])
+# corrplot::corrplot(f.cor, method = "number")
+# 
+# ggplot(data = bugs) +
+#   # geom_point(aes(delta_precip, cdelt_precip, color = season)) +
+#   geom_point(aes(norm_def_precip, mn_pch_precip)) +
+#   theme_minimal()
+# 
+# ggplot(data = fish) +
+#   # geom_point(aes(delta_precip, cdelt_precip, color = season)) +
+#   # geom_point(aes(norm_def_precip, mn_pch_precip)) +
+#   # geom_point(aes(norm_def_precip, norm_pct_precip)) +
+#   geom_point(aes(norm_depart_precip, delta_precip)) +
+#   theme_minimal()
+
+rm(f.cor, fish, bugs, precip, precip.sub)
+
+}
+
+##stream temp ----
+if(summarize_stream_temp) {
+  
+#stream temp dates are limited by the available dates of recorded water temp at usgs gages
+pred_temp <- read_csv(paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly_envchange.csv"))
+# gage_ids[!gage_ids %in% pred_temp$site_no] #double checking
+
+pred_temp <- pred_temp[pred_temp$site_no %in% gage_ids, ]
+pred_temp <- pred_temp %>%
+  mutate(season = case_when(month %in% c("12", "1", "2") ~ "winter",
+                            month %in% c("3", "4", "5") ~ "spring",
+                            month %in% c("6", "7", "8") ~ "summer",
+                            month %in% c("9", "10", "11") ~ "fall"))
+
+### bugs: Aug. 1964 to Jan. 2022 ----
+water_temp <- pred_temp %>%
+  filter(date >= as.Date("1964-08-01") & date <= as.Date("2022-01-31"))
+
+bugs <- calc_var_diff(water_temp, env_var = "water_temp", site_var = "site_no",
+                      var2grp = c("year", "season"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+bugs <- bugs %>%
+  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
+
+write_csv(bugs, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_bugs.csv"))
+
+# water_temp %>%
+#   group_by(date, season) %>%
+#   summarise(mn_temp = mean(water_temp)) %>%
+#   ggplot() +
+#   geom_line(aes(date, mn_temp, color = season)) +
+#   theme_minimal()
+
+### fish: Jan. 1923 to Jun. 2021 ----
+water_temp <- pred_temp %>%
+  filter(date >= as.Date("1923-01-01") & date <= as.Date("2021-06-30"))
+
+fish <- calc_var_diff(water_temp, env_var = "water_temp", site_var = "site_no",
+                      var2grp = c("year", "season"),
+                      norm_comp = TRUE, pct_change = TRUE, 
+                      delta_var = TRUE, num_yr_start_end = 5,
+                      c_var_diff = TRUE, growth_rate = TRUE)
+
+fish <- fish %>%
+  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
+
+write_csv(fish, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_fish.csv"))
+
+### plots ----
+# f.cor <- cor(bugs[, -c(1,2)])
+# corrplot::corrplot(f.cor, method = "number")
+# 
+# ggplot(data = fish) +
+#   # geom_point(aes(delta_water_temp, cdelt_water_temp, color = season)) +
+#   # geom_point(aes(delta_water_temp, pct_avg_gr_water_temp, color = season)) +
+#   geom_point(aes(norm_def_water_temp, cdelt_water_temp, color = season)) +
+#   theme_minimal()
+# 
+# ggplot(data = bugs) +
+#   # geom_point(aes(delta_water_temp, cdelt_water_temp, color = season)) +
+#   # geom_point(aes(delta_water_temp, pct_avg_gr_water_temp, color = season)) +
+#   geom_point(aes(delta_water_temp, pct_avg_gr_water_temp, color = season)) +
+#   theme_minimal()
+  
+}
+
+##land cover change ----
+
+###download nlcd data ----
+if(download_nlcd) {
+  
+library(FedData)
+
+#make download template
+clip_box <- matrix(c(coords[["xmin"]], coords[["ymin"]],
+                     coords[["xmax"]], coords[["ymin"]],
+                     coords[["xmax"]], coords[["ymax"]],
+                     coords[["xmin"]], coords[["ymax"]],
+                     coords[["xmin"]], coords[["ymin"]]), 
+                     ncol = 2, byrow = TRUE)
+clip_box <- st_polygon(list(clip_box)) %>%
+  st_sfc()
+clip_box <- st_sf(clip_box, crs = 4269)
+
+#break down box into downloadable sizes
+multi_clip_box <- st_make_grid(clip_box, n = c(5, 5))
+
+#set downloadable years
+download_years <- c(2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)
+
+#for loop to download section x year
+for(i in seq_along(multi_clip_box)) {
+  
+  for(n_year in download_years) {
+    
+    if(file.exists(paste0(PATH, "/02_EnvDat/NLCD/box", i, "_NLCD_Land_Cover_", n_year, ".tif"))) { next }
+    
+    tmp <- get_nlcd(
+      template = multi_clip_box[i],
+      year = n_year,
+      label = paste0("box", i),
+      extraction.dir = file.path(PATH, "02_EnvDat", "NLCD")
+    )
+    
+    message(n_year, " for box", i, " downloaded")
+    Sys.sleep(0.5)
+    
+  }
+  
+  message(round(i/length(multi_clip_box)*100, digits = 2), "% complete")
+  
+}
+
+rm(clip_box, multi_clip_box, tmp, download_years, i, n_year)
+
+} ## end nlcd download section ##
+
+###summarize lc by huc ----
+
+#match nlcd crs
+huc.tr <- st_transform(huc, 5070)
+
+nlcd_years <- c(2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)
+
+nlcd_summ <- expand.grid(huc12 = huc_ids, nlcd_class = nlcd_colors()$ID)
+for(n_year in nlcd_years) {
+  nlcd_list <- list.files(file.path(PATH, "02_EnvDat", "NLCD"), pattern = paste0("Land_Cover_", n_year, ".tif"), full.names = TRUE)
+  nlcd_list <- nlcd_list[!grepl(".xml", nlcd_list)]
+  
+  tmp <- vrt(nlcd_list) #load in list of rasters for specific date, join together
+  
+  #extract temperature values at all gage sites
+  nlcd1 <- exact_extract(tmp, huc.tr, function(df) {
+    df %>%
+      mutate(frac_total = coverage_fraction / sum(coverage_fraction)) %>%
+      group_by(huc12, value) %>%
+      summarize(freq = sum(frac_total))
+  }, summarize_df = TRUE, include_cols = 'huc12', progress = FALSE)
+  
+  nlcd1 <- nlcd1 %>%
+    mutate(freq = round(freq*100, digits = 6))
+  
+  names(nlcd1)[names(nlcd1) == "freq"] <- paste0("pct_cov_", n_year)
+  names(nlcd1)[names(nlcd1) == "value"] <- "nlcd_class"
+  
+  nlcd_summ <- nlcd_summ %>%
+    left_join(., nlcd1, by = names(.)[names(.) %in% names(nlcd1)])
+  
+  message(round(which(n_year == nlcd_years)/length(nlcd_years)*100, digits = 2), "% complete.")
+}
+
+write_csv(nlcd_summ, paste0(PATH, "/02_EnvDat/NLCD/nlcd_yearly_at_huc_lvl.csv"))
+  
+##DO IMPERVIOUS AND CANOPY??? from GET_NLCD??
+  
 ##ADD HDI VARIABLES FROM FOX & MAGOULICK 2022?
 
-
-
-
-
-
-
-t <- nhd %>%
-  mutate(missing_c = ifelse(COMID %in% m.c, "wrong", "right")) %>%
-  group_by(missing_c) %>%
-  summarise(across(where(is.numeric), mean))
 
 
 
