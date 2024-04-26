@@ -11,7 +11,7 @@ get_occ_date_range <- FALSE
 get_huc_lvl_air_temp <- FALSE; summarize_air_temp <- FALSE
 download_prism_ppt <- FALSE; clip_prism_ppt <- FALSE; get_huc_lvl_ppt <- FALSE; summarize_ppt <- FALSE
 summarize_stream_temp <- FALSE
-download_nlcd <- TRUE
+download_nlcd <- FALSE; get_huc_lvl_nlcd <- FALSE; summarize_nlcd <- FALSE
 
 #load in sites for summarizing env var data
 occ.sites <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
@@ -350,7 +350,7 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
                           c_var_diff = TRUE, #cumulative change over length of time (essentially length of the trend line)
                           growth_rate = TRUE #growth rate calculated from decomposed time series, not grouped by season or anything
 ) {
-  x <- precip.sub #to test
+  # x <- air_temp #to test
   # add in site id column for grouping purposes
   var2grp <- c(site_var, var2grp)
   
@@ -362,11 +362,11 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
     #get normal = average value over all years ----
     normal <- x %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      summarise(norm = mean(.data[[env_var]]))
+      summarise(norm = mean(.data[[env_var]], na.rm = TRUE))
     
     obs <- x %>%
       group_by(across(all_of(var2grp))) %>% 
-      summarise(obs = mean(.data[[env_var]])) %>%
+      summarise(obs = mean(.data[[env_var]], na.rm = TRUE)) %>%
       ungroup() %>%
       left_join(., normal, by = names(.)[names(.) %in% names(normal)])
     
@@ -374,21 +374,21 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
     def <- obs %>%
       mutate(def = (obs - norm) / norm) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      summarise(norm_def = mean(def)) %>%
+      summarise(norm_def = mean(def, na.rm = TRUE)) %>%
       ungroup()
     
     #departure from normal (obs - normal) ----
     depart <- obs %>%
       mutate(depart = obs - norm) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      summarise(norm_depart = mean(depart)) %>%
+      summarise(norm_depart = mean(depart, na.rm = TRUE)) %>%
       ungroup()
     
     #percentage of normal (obs/normal * 100) ----
     pct <- obs %>%
       mutate(pct = obs/norm*100) %>% 
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      summarise(norm_pct = mean(pct)) %>%
+      summarise(norm_pct = mean(pct, na.rm = TRUE)) %>%
       ungroup()
     
     all_res <- all_res %>%
@@ -404,13 +404,17 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
       summarise(mn_var = mean(.data[[env_var]])) %>%
       arrange(across(all_of(var2grp))) %>% 
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      mutate(pct_ch = (mn_var / lag(mn_var) - 1) * 100,
-             pct_ch = ifelse(mn_var > lag(mn_var), abs(pct_ch), pct_ch)) %>% #second line to handle transitions from neg. to pos.
-      summarise(mn_pch = mean(pct_ch, na.rm = TRUE))
+      mutate(diff_yr = year - lag(year),
+             ann_pct_ch = ifelse(mn_var == 0 & lag(mn_var) == 0, 0,
+                                 ifelse(lag(mn_var) == 0 & mn_var != 0, 100,
+                                       ((mn_var / lag(mn_var))^(1 / diff_yr) - 1)*100)),
+             ann_pct_ch = ifelse((mn_var - lag(mn_var)) >= 0, abs(ann_pct_ch), abs(ann_pct_ch)*-1)) %>% #second line to handle transitions from neg. to pos.
+      # mutate(pct_ch = (mn_var / lag(mn_var) - 1) * 100,
+      #        diff = ann_pct_ch - pct_ch) %>% 
+      summarise(mn_pch = mean(ann_pct_ch, na.rm = TRUE))
     
     all_res <- all_res %>% left_join(., mn.pch, by = names(.)[names(.) %in% names(mn.pch)])
   }
-  
   
   #diff between start and end of sample period ----
   if(delta_var) {
@@ -440,8 +444,10 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
       summarise(ssn_var = mean(.data[[env_var]])) %>% #one seasonal value per year
       arrange(across(all_of(var2grp))) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
-      mutate(cdelt_var = ssn_var - lag(ssn_var)) %>%
-      summarise(cdelt_var = sum(abs(cdelt_var), na.rm = TRUE))
+      mutate(diff_yr = year - lag(year),
+             cdelt_var = ssn_var - lag(ssn_var),
+             adj_cdelt = abs(cdelt_var) / diff_yr) %>%
+      summarise(cdelt_var = sum(abs(adj_cdelt), na.rm = TRUE))
     
     all_res <- all_res %>% left_join(., c_var,  by = names(.)[names(.) %in% names(c_var)])
   }
@@ -547,7 +553,8 @@ bugs <- calc_var_diff(air_temp, env_var = "air_temp", site_var = "huc12",
                       c_var_diff = TRUE, growth_rate = TRUE)
 
 bugs <- bugs %>%
-  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
+  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)),
+         across(matches("norm"), ~ round(.x, digits = 10)))
 
 write_csv(bugs, paste0(PATH, "/02_EnvDat/air_temp_temporal_change_bugs.csv"))
   
@@ -562,14 +569,14 @@ fish <- calc_var_diff(air_temp, env_var = "air_temp", site_var = "huc12",
                       c_var_diff = TRUE, growth_rate = TRUE)
 
 fish <- fish %>%
-  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
+  mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)),
+         across(matches("norm"), ~ round(.x, digits = 10)))
 
 write_csv(fish, paste0(PATH, "/02_EnvDat/air_temp_temporal_change_fish.csv"))
 
-fish <- fish %>% arrange(huc12, season)
-bugs <- bugs %>% arrange(huc12, season)
-
 ### plots ----
+# fish <- fish %>% arrange(huc12, season)
+# bugs <- bugs %>% arrange(huc12, season)
 # f.cor <- cor(bugs[, -c(1,2)])
 # corrplot::corrplot(f.cor, method = "number")
 # 
@@ -808,6 +815,14 @@ write_csv(fish, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_fish.csv"))
 # f.cor <- cor(bugs[, -c(1,2)])
 # corrplot::corrplot(f.cor, method = "number")
 # 
+# water_temp %>%
+#   filter(site_no == "06923500") %>%
+#   group_by(year, season) %>%
+#   summarise(mn_temp = mean(water_temp)) %>%
+#   ggplot() +
+#   geom_line(aes(year, mn_temp, color = season)) +
+#   scale_y_continuous(limits = c(0, 30))
+#   
 # ggplot(data = fish) +
 #   # geom_point(aes(delta_water_temp, cdelt_water_temp, color = season)) +
 #   # geom_point(aes(delta_water_temp, pct_avg_gr_water_temp, color = season)) +
@@ -819,7 +834,9 @@ write_csv(fish, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_fish.csv"))
 #   # geom_point(aes(delta_water_temp, pct_avg_gr_water_temp, color = season)) +
 #   geom_point(aes(delta_water_temp, pct_avg_gr_water_temp, color = season)) +
 #   theme_minimal()
-  
+
+rm(bugs, fish, pred_temp, water_temp)
+
 }
 
 ##land cover change ----
@@ -844,24 +861,39 @@ clip_box <- st_sf(clip_box, crs = 4269)
 multi_clip_box <- st_make_grid(clip_box, n = c(5, 5))
 
 #set downloadable years
-download_years <- c(2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)
+download_years <- c(2001, 2004, 2006, 2008, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)
+#dataset types
+data_types <- c("landcover", "impervious", "canopy")
 
 #for loop to download section x year
 for(i in seq_along(multi_clip_box)) {
   
   for(n_year in download_years) {
     
-    if(file.exists(paste0(PATH, "/02_EnvDat/NLCD/box", i, "_NLCD_Land_Cover_", n_year, ".tif"))) { next }
-    
-    tmp <- get_nlcd(
-      template = multi_clip_box[i],
-      year = n_year,
-      label = paste0("box", i),
-      extraction.dir = file.path(PATH, "02_EnvDat", "NLCD")
-    )
-    
-    message(n_year, " for box", i, " downloaded")
-    Sys.sleep(0.5)
+    for(dat.t in data_types) {
+      
+      if(dat.t %in% c("landcover", "impervious") & n_year %in% c(2012, 2014, 2015, 2017, 2018, 2020)) { next } #not available in these years
+      if(dat.t == "canopy" & n_year %in% c(2001, 2004, 2006, 2008)) { next } #not available in these years
+      
+      if(dat.t == "landcover") { data_name <- "Land_Cover" }
+      if(dat.t == "impervious") { data_name <- "Impervious" }
+      if(dat.t == "canopy") { data_name <- "Tree_Canopy" }
+
+      if(file.exists(paste0(PATH, "/02_EnvDat/NLCD/box", i, "_NLCD_", data_name, "_", n_year, ".tif"))) { next }
+      
+      tmp <- get_nlcd(
+        template = multi_clip_box[i],
+        dataset = dat.t,
+        year = n_year,
+        label = paste0("box", i),
+        extraction.dir = file.path(PATH, "02_EnvDat", "NLCD")
+      )
+      
+      message(dat.t, ": ", n_year, " for box", i, " downloaded")
+      rm(data_name)
+      Sys.sleep(0.5)
+      
+    }
     
   }
   
@@ -874,13 +906,57 @@ rm(clip_box, multi_clip_box, tmp, download_years, i, n_year)
 } ## end nlcd download section ##
 
 ###summarize lc by huc ----
-
+if(get_huc_lvl_nlcd) {
 #match nlcd crs
 huc.tr <- st_transform(huc, 5070)
 
-nlcd_years <- c(2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)
+#imperviousness and tree canopy
+dat_years <- c(2001, 2004, 2006, 2008, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)
+data_types <- c("Impervious", "Tree_Canopy")
 
-nlcd_summ <- expand.grid(huc12 = huc_ids, nlcd_class = nlcd_colors()$ID)
+dat_summ <- expand.grid(huc12 = huc_ids) # set up dataframe to get results
+for(data_name in data_types) { #for loop for mem
+  
+  message("Starting ", data_name, " summarizing")
+  
+  for(n_year in dat_years) {
+    
+    if(data_name == "Impervious" & n_year %in% c(2012, 2014, 2015, 2017, 2018, 2020)) { next } #not available in these years
+    if(data_name == "Tree_Canopy" & n_year %in% c(2001, 2004, 2006, 2008)) { next } #not available in these years
+    
+    file_list <- list.files(file.path(PATH, "02_EnvDat", "NLCD"), pattern = paste0(data_name, "_", n_year, ".tif"), full.names = TRUE)
+    file_list <- file_list[!grepl(".xml", nlcd_list)]
+    
+    tmp <- vrt(file_list) #load the tiled rasters as one layer
+    
+    #extract temperature values at all gage sites
+    dat1 <- exact_extract(tmp, huc.tr, function(df) {
+      df %>%
+        mutate(value_frac = value * coverage_fraction) %>%
+        group_by(huc12) %>%
+        summarise(pct_cov = sum(value_frac, na.rm = TRUE) / sum(coverage_fraction, na.rm = TRUE))
+    }, summarize_df = TRUE, include_cols = 'huc12', progress = FALSE)
+    
+    dat1 <- dat1 %>%
+      mutate(pct_cov = round(pct_cov, digits = 6))
+    
+    names(dat1)[names(dat1) == "pct_cov"] <- paste(data_name, "pct", n_year, sep = "_")
+    
+    dat_summ <- dat_summ %>%
+      left_join(., dat1, by = "huc12")
+    
+    message(round(which(n_year == dat_years)/length(dat_years)*100, digits = 2), "% complete.")
+    
+  }
+  
+}
+
+write_csv(dat_summ, paste0(PATH, "/02_EnvDat/NLCD/imp_treecanopy_yearly_at_huc_lvl.csv"))
+
+#land cover
+nlcd_years <-  c(2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)
+
+nlcd_summ <- expand.grid(huc12 = huc_ids, nlcd_class = nlcd_colors()$ID) # set up dataframe to get results
 for(n_year in nlcd_years) {
   nlcd_list <- list.files(file.path(PATH, "02_EnvDat", "NLCD"), pattern = paste0("Land_Cover_", n_year, ".tif"), full.names = TRUE)
   nlcd_list <- nlcd_list[!grepl(".xml", nlcd_list)]
@@ -907,13 +983,102 @@ for(n_year in nlcd_years) {
   message(round(which(n_year == nlcd_years)/length(nlcd_years)*100, digits = 2), "% complete.")
 }
 
+nlcd_summ <- nlcd_summ %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.x), 0, .x)))
+
 write_csv(nlcd_summ, paste0(PATH, "/02_EnvDat/NLCD/nlcd_yearly_at_huc_lvl.csv"))
-  
-##DO IMPERVIOUS AND CANOPY??? from GET_NLCD??
-  
+
+rm(nlcd_list, tmp, nlcd1, nlcd_summ, dat1, huc.tr, dat.t, dat_years, data_types, nlcd_years, n_year, file_list)
+}
+
+###summarize change over time ----
+if(summarize_nlcd) {
+#no taxonomic specific dates bc of temporal extents
+nlcd_summ <- read_csv(paste0(PATH, "/02_EnvDat/NLCD/nlcd_yearly_at_huc_lvl.csv"))
+dat_summ <- read_csv(paste0(PATH, "/02_EnvDat/NLCD/imp_treecanopy_yearly_at_huc_lvl.csv"))
+
+tmp1 <- nlcd_summ %>%
+  pivot_longer(contains("pct_cov"), names_to = "year", values_to = "nlcd_pct") %>%
+  mutate(year = gsub("pct_cov_", "", year),
+         year = as.numeric(year),
+         nlcd_class = as.factor(nlcd_class))
+
+nlcd_delt <- calc_var_diff(tmp1, env_var = "nlcd_pct", site_var = "huc12",
+                           var2grp = c("year", "nlcd_class"),
+                           norm_comp = TRUE, pct_change = TRUE, 
+                           delta_var = TRUE, num_yr_start_end = 2,
+                           c_var_diff = TRUE, growth_rate = FALSE)
+
+write_csv(nlcd_delt, paste0(PATH, "/02_EnvDat/nlcd_temporal_change_alltax.csv"))
+
+tmp2 <- dat_summ %>%
+  pivot_longer(contains("pct_"), names_to = "type_year", values_to = "dat_pct") %>%
+  mutate(year = gsub(".*_pct_", "", type_year),
+         year = as.numeric(year),
+         data_type = gsub("_pct_.*$", "", type_year)) %>%
+  select(-type_year)
+
+#canopy cover
+tcc <- tmp2 %>% 
+  filter(data_type == "Tree_Canopy") %>%
+  rename(tcc_pct = dat_pct) %>%
+  select(-data_type)
+
+tcc_delt <- calc_var_diff(tcc, env_var = "tcc_pct", site_var = "huc12",
+                          var2grp = c("year"),
+                          norm_comp = TRUE, pct_change = TRUE, 
+                          delta_var = TRUE, num_yr_start_end = 2,
+                          c_var_diff = TRUE, growth_rate = FALSE)
+
+write_csv(tcc_delt, paste0(PATH, "/02_EnvDat/tcc_temporal_change_alltax.csv"))
+
+#imp
+imp <- tmp2 %>% 
+  filter(data_type == "Impervious") %>%
+  rename(imp_pct = dat_pct) %>%
+  select(-data_type)
+
+imp_delt <- calc_var_diff(imp, env_var = "imp_pct", site_var = "huc12",
+                          var2grp = c("year"),
+                          norm_comp = TRUE, pct_change = TRUE, 
+                          delta_var = TRUE, num_yr_start_end = 2,
+                          c_var_diff = TRUE, growth_rate = FALSE)
+
+write_csv(imp_delt, paste0(PATH, "/02_EnvDat/impervious_temporal_change_alltax.csv"))
+
+
+####plots ----
+# f.cor <- cor(nlcd_delt[, -c(1,2)])
+# corrplot::corrplot(f.cor, method = "number")
+# 
+# imp %>%
+#   filter(huc12 == "111101030303") %>%
+#   # group_by(year) %>%
+#   # summarise(imp_pct = median(imp_pct)) %>%
+#   ggplot() +
+#   geom_line(aes(year, imp_pct)) +
+#   theme(legend.position = "none")
+# tcc %>%
+#   filter(huc12 == "110702090501") %>%
+#   # group_by(year) %>%
+#   # summarise(tcc_pct = median(tcc_pct)) %>%
+#   ggplot() +
+#   geom_line(aes(year, tcc_pct)) +
+#   theme(legend.position = "none")
+
+# plot(huc.tr[huc.tr$huc12 == "111401070407",]$geometry)
+# plot(tmp, add = TRUE)
+# nlcd_summ %>%
+#   group_by(nlcd_class) %>%
+#   summarise(across(where(is.numeric), mean)) %>%
+#   pivot_longer(contains("pct_cov"), names_to = "year", values_to = "pct_cov") %>%
+#   mutate(year = gsub("pct_cov_", "", year),
+#          year = as.numeric(year),
+#          nlcd_class = as.factor(nlcd_class)) %>%
+#   ggplot() +
+#   geom_line(aes(year, pct_cov, color = nlcd_class))
+
+rm(nlcd_delt, tmp1, nlcd_summ, tmp2, imp, imp_delt, tcc, tcc_delt, dat_summ)
+}
+
 ##ADD HDI VARIABLES FROM FOX & MAGOULICK 2022?
-
-
-
-
-
