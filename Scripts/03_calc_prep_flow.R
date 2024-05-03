@@ -194,6 +194,7 @@ site_check <- read_csv(paste0(PATH, "/02_EnvDat/raw_daily_flow/daily_flow_data_i
 #which variables to pull with adjusted discharge (+ 0.01)
 #redo for (ma4, ma9, ma10, ma11, mh18?, mh19?, fh11?, dh22?, dh23?, dh24?, tl3?, th3?, ra6, ra7) - last two automatic adj. in function
 vars <- c("ma4", "ma9", "ma10", "ma11", "mh18", "mh19", "fh11", "dh22", "dh23", "dh24", "tl3", "th3")
+# vars <- c("ma4", "ma9", "ma10", "ma11", "mh18", "mh19", "fh11", "dh22", "dh23", "dh24", "tl3", "tl4", "ta1", "ta2", "ta3", "th3")
 #potentially just ma4, ra6, and ra7 overall though
 
 hit_df <- data.frame()

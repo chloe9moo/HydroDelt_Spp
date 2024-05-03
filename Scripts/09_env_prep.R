@@ -275,7 +275,7 @@ nhd <- nhd[nhd$COMID %in% comids,]
 
 if(file.exists(paste0(PATH, "/02_EnvDat/HUCs_NHDs/nhd_huc_intersection_info.csv"))) { #load intersection info if starting over
   
-  huc_nhd_df <- read_csv(paste0(PATH, "/02_EnvDat/HUCs_NHDs/nhd_huc_intersection_info.csv"))
+  huc_nhd_df <- read_csv(paste0(PATH, "/02_EnvDat/HUCs_NHDs/nhd_huc_intersection_info.csv"), col_types = cols(.default = col_character()))
   
 } else { #get intersection info if starting over
   
@@ -468,7 +468,7 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
       ts.gr <- ts(y[[env_var]], start = c(y[1, ]$year, y[1, ]$month), end = c(y[nrow(y), ]$year, y[nrow(y), ]$month), frequency = 12)
       
       m <- decompose(ts.gr, type = "multiplicative")
-      m <- decompose(ts.gr, type = "additive")
+      # m <- decompose(ts.gr, type = "additive")
       trend <- na.omit(m$trend)
       trend <- diff(log(trend))
       
@@ -796,7 +796,7 @@ write_csv(bugs, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_bugs.csv"))
 #   geom_line(aes(date, mn_temp, color = season)) +
 #   theme_minimal()
 
-### fish: Jan. 1923 to Jun. 2021 ----
+## fish: Jan. 1923 to Jun. 2021 ----
 water_temp <- pred_temp %>%
   filter(date >= as.Date("1923-01-01") & date <= as.Date("2021-06-30"))
 
@@ -811,7 +811,7 @@ fish <- fish %>%
 
 write_csv(fish, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_fish.csv"))
 
-### plots ----
+## plots ----
 # f.cor <- cor(bugs[, -c(1,2)])
 # corrplot::corrplot(f.cor, method = "number")
 # 
@@ -1081,4 +1081,81 @@ write_csv(imp_delt, paste0(PATH, "/02_EnvDat/impervious_temporal_change_alltax.c
 rm(nlcd_delt, tmp1, nlcd_summ, tmp2, imp, imp_delt, tcc, tcc_delt, dat_summ)
 }
 
-##ADD HDI VARIABLES FROM FOX & MAGOULICK 2022?
+# Variable Summ. + Plots ----
+source("Scripts/XX_colors.R")
+
+flow.link <- lapply(occ.sites, function(x) {
+  x %>%
+    select(COMID, gage_no_15yr, flw_type) %>%
+    rename(site_no = gage_no_15yr)
+})
+flow.link <- bind_rows(flow.link)
+flow.link <- distinct(flow.link)
+
+flow.link <- left_join(flow.link, select(huc_nhd_df, -comid_idx), by = c("COMID" = "comid"))
+
+## stream cat ----
+stream_cat <- read_csv(paste0(PATH, "/02_EnvDat/StreamCat/stream_cat_vars_all_sites.csv"), col_types = cols(COMID = col_character(), .default = col_number()))
+stream_cat <- lapply(occ.sites, function(x) {
+  x %>%
+    select(COMID, flw_type) %>%
+    left_join(., stream_cat)
+})
+
+stream_cat[[1]]$taxa <- "bug"
+stream_cat[[2]]$taxa <- "fish"
+
+stream_cat <- bind_rows(stream_cat)
+
+stream_cat %>%
+  select(-taxa) %>%
+  distinct() %>%
+  ggplot() +
+  geom_density(aes(CLAYWS, fill = flw_type), alpha = 0.6) +
+  scale_y_continuous(expand = c(0,0)) +
+  # geom_boxplot(aes(flw_type, TMAX8110WS, fill = flw_type)) +
+  scale_fill_manual(values = flow.pal) +
+  theme_classic()
+
+## hydro alt ----
+hydro_alt <- read_csv(paste0(PATH, "/02_EnvDat/hydrologic_alteration_all_sites.csv"))
+
+## HIT ----
+hit <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_adjustments_applied.csv"))
+# hit.orig <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240130.csv"))
+
+hit <- lapply(occ.sites, function(x) {
+  x %>%
+    select(gage_no_15yr, flw_type) %>%
+    rename(site_no = gage_no_15yr) %>%
+    left_join(., hit)
+})
+
+hit[[1]]$taxa <- "bug"
+hit[[2]]$taxa <- "fish"
+
+hit <- bind_rows(hit)
+
+hit %>%
+  # select(-taxa) %>%
+  filter(taxa == "fish") %>%
+  distinct() %>%
+  ggplot() +
+  geom_density(aes(dh1, fill = flw_type), alpha = 0.6) +
+  scale_y_continuous(expand = c(0,0)) +
+  # geom_boxplot(aes(flw_type, TMAX8110WS, fill = flw_type)) +
+  scale_fill_manual(values = flow.pal) +
+  theme_classic()
+
+##air temp change ----
+air_temp <- read_csv(paste0(PATH, "/02_EnvDat/air_temp_temporal_change_fish.csv"))
+
+##precip change ----
+
+##stream temp change ----
+stream_temp <- read_csv(paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_fish.csv"))
+
+##land cover change ----
+nlcd <- read_csv(paste0(PATH, "/02_EnvDat/nlcd_temporal_change_alltax.csv"))
+
+nlcd <- left_join(nlcd, flow.link, by = c("huc12" = "huc_id"))
