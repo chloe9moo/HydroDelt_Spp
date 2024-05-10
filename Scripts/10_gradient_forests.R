@@ -6,6 +6,10 @@ options(readr.show_col_types = FALSE)
 PATH <- getwd()
 
 #read + prep data ----
+#for adding watershed info to bio data
+huc_nhd_df <- read_csv(paste0(PATH, "/02_EnvDat/HUCs_NHDs/nhd_huc_intersection_info.csv"), col_types = cols(prop_in_huc = col_number(), .default = col_character())) %>% 
+  separate_longer_delim(huc_id, delim = "|")
+
 #bio 
 # file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
 # occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
@@ -19,25 +23,85 @@ PATH <- getwd()
 #trait
 fl <- list.files(paste0(PATH, "/20_Traits"), pattern = "site_x_trait_.*_abundance", full.names = TRUE)
 site.list <- lapply(fl, function(x) {
-  x <- read_csv(x) %>%
+  x <- read_csv(x, col_types = cols(COMID = col_character())) %>%
     select(-contains("dist2")) %>%
     rename(site_no = gage_no_15yr)
-  names(x) <- gsub("-", "_", names(x))
+  
+  names(x) <- gsub("-", "_", names(x)) #fix names for gradientForest function
+  
+  # x <- left_join(x, huc_nhd_df[, names(huc_nhd_df) %in% c("comid", "huc_id")], by = c("COMID" = "comid")) %>%
+  #   rename(huc12 = huc_id)
+  
   return(x)
 })
 
-species.list <- names(site.list[[3]])[!names(site.list[[3]]) %in% c("lat", "long", "COMID", "flw_type", "site_no", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id")]
+species.list <- names(site.list[[3]])[!names(site.list[[3]]) %in% c("lat", "long", "COMID", "flw_type", "site_no", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id", "huc12")]
 
 #env dat
 env.info <- read_csv(paste0(PATH, "/02_EnvDat/environmental_variable_info.csv"))
-env.info <- env.info[env.info$include_baseline == "yes" & !is.na(env.info$include_baseline), ] #only include previously selected variables
+env.info <- env.info[env.info$include_alt == "yes" & !is.na(env.info$include_alt), ] #only include previously selected variables from info table
 
-var.names <- env.info$variable_col_name
+var.names <- env.info$variable_col_name #variable names in character vector for later
 
-env.list <- lapply(unique(env.info$variable_source)[unique(env.info$variable_source) != "taxa dataset"], function(x) {
+#select + adjust variable source needed (where necessary)
+var.source <- unique(env.info$variable_source)
+
+if(any(grepl("fish|bug", var.source))) {
+  
+  tmp <- var.source[grepl("fish|bug", var.source)]
+  
+  if(any(grepl("fish", fl))) {
+    tmp <- gsub("\\[fish\\|bug\\]", "fish", tmp)
+  } else {
+    tmp <-  gsub("\\[fish\\|bug\\]", "bug", tmp)
+  }
+  
+  var.source <- c(var.source[!grepl("fish|bug", var.source)], tmp)
+  
+  rm(tmp)
+}
+
+if(any(grepl("all\\|ssn", var.source))) {
+  
+  tmp <- var.source[grepl("all\\|ssn", var.source)]
+  
+  tmp <- gsub("\\[all\\|ssn\\]", "ssn", tmp)
+  
+  var.source <- c(var.source[!grepl("all\\|ssn", var.source)], tmp)
+  
+  rm(tmp)
+}
+
+env.list <- lapply(var.source[var.source != "taxa dataset"], function(x) {
   file.name <- paste0(PATH, x)
   env.file <- read_csv(file.name)
-  env.file <- env.file[, names(env.file) %in% c(var.names, "COMID", "site_no")]
+  env.file <- env.file %>% mutate(across(matches("COMID|site_no|huc12"), as.character))
+  env.file <- env.file[, names(env.file) %in% c(var.names, "huc12", "season", "nlcd_class", "COMID", "site_no")]
+  
+  #widen df if it has grouping column
+  if(any(names(env.file) %in% c("season", "nlcd_class"))) {
+    env.file <- env.file %>%
+      pivot_longer(cols = -matches("huc12|season|nlcd_class|COMID|site_no"), names_to = "variable", values_to = "value") %>%
+      pivot_wider(names_from = c("variable", matches("nlcd_class|season")), values_from = value)
+  }
+  
+  #remove zero sum or all NA columns (won't be useful)
+  env.file <- env.file[, !sapply(env.file, function(x) {
+    if(is.numeric(x)) {
+      all(is.na(x)) | (sum(x, na.rm = TRUE) == 0)
+    } else {
+      all(is.na(x))
+    }
+  })]
+  
+  #for variables summarized at watershed level, some streams fell into more than one watershed, summarizing across all watersheds
+  if(any(names(env.file) == "huc12")) {
+    env.file <- left_join(env.file, huc_nhd_df[, names(huc_nhd_df) %in% c("comid", "huc_id")], by = c("huc12" = "huc_id")) %>% 
+      group_by(comid) %>%
+      summarise(across(-huc12, ~mean(.x, na.rm = TRUE))) %>%
+      rename(COMID = comid)
+  }
+  
   return(env.file)
 })
 
@@ -252,28 +316,29 @@ flow.opt <- c("Int", "RO", "GW")
 # }
 
 #extra
+# gf.out <- readRDS(paste0(PATH, "/10_GFOutput/2024_05_03/gf_fish_trait_GW_allgage.rds"))
 # gf.out$call$nbin <- 201
 # plot(gf.out)
 # most_important <- names(importance(gf.out))[1:25]
-# 
-# par(mgp = c(2, 0.75, 0))
+# #
+# # par(mgp = c(2, 0.75, 0))
 # plot(gf.out, plot.type = "S", imp.vars = most_important,
 #      leg.posn = "topright", cex.legend = 0.4, cex.axis = 0.6,
 #      cex.lab = 0.7, line.ylab = 0.9,
 #      par.args = list(mgp = c(1.5, 0.5, 0), mar = c(3.1, 1.5, 0.1, 1)))
-# 
+# #
 # plot(gf.out, plot.type = "C", imp.vars = most_important,
 #      show.overall = F, legend = T, leg.posn = "topleft",
 #      leg.nspecies = 5, cex.lab = 0.7, cex.legend = 0.4,
-#      cex.axis = 0.6, line.ylab = 0.9, 
+#      cex.axis = 0.6, line.ylab = 0.9,
 #      par.args = list(mgp = c(1.5, 0.5, 0), mar = c(2.5, 1, 0.1, 0.5), omi = c(0, 0.3, 0, 0)))
-# 
+# #
 # plot(gf.out, plot.type = "P", show.names = T, horizontal = F,
 #      cex.axis = 1, cex.labels = 0.7, line = 2.5)
-# 
+# #
 # plot(gf.out, plot.type = "C", imp.vars = most_important,
 #      show.species = F, common.scale = T, cex.axis = 0.6,
-#      cex.lab = 0.7, line.ylab = 0.9, 
+#      cex.lab = 0.7, line.ylab = 0.9,
 #      par.args = list(mgp = c(1.5, 0.5, 0), mar = c(2.5, 1, 0.1, 0.5), omi = c(0, 0.3, 0, 0)))
 # 
 # plot(bio.env.dat$WSAREASQKM, bio.env.dat$longevity)

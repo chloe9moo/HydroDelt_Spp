@@ -8,10 +8,10 @@ PATH <- getwd()
 #set which sections to run ----
 get_stream_cat <- FALSE; get_hydro_alt <- FALSE; get_adj_hit <- FALSE
 get_occ_date_range <- FALSE
-get_huc_lvl_air_temp <- FALSE; summarize_air_temp <- FALSE
-download_prism_ppt <- FALSE; clip_prism_ppt <- FALSE; get_huc_lvl_ppt <- FALSE; summarize_ppt <- FALSE
-summarize_stream_temp <- FALSE
-download_nlcd <- FALSE; get_huc_lvl_nlcd <- FALSE; summarize_nlcd <- FALSE
+get_huc_lvl_air_temp <- FALSE; summarize_air_temp <- TRUE
+download_prism_ppt <- FALSE; clip_prism_ppt <- FALSE; get_huc_lvl_ppt <- FALSE; summarize_ppt <- TRUE
+summarize_stream_temp <- TRUE
+download_nlcd <- FALSE; get_huc_lvl_nlcd <- FALSE; summarize_nlcd <- TRUE
 
 #load in sites for summarizing env var data
 occ.sites <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
@@ -101,7 +101,7 @@ h.alt <- read_csv(paste0(PATH, "/02_EnvDat/hydro_alt_disturb/predicted_alteratio
                                                                                                                    .default = "n"))
 h.alt <- h.alt %>% select(COMID, contains("pn"))
 
-#get COMIDs (needed to obtain some env vars)
+#get COMIDs of occ datasets
 h.alt.sub <- lapply(occ.sites, function(x) select(x, COMID, long, lat))
 h.alt.sub <- bind_rows(h.alt.sub) %>% distinct()
 
@@ -151,11 +151,9 @@ while (nrow(na.h.alt) != 0) {
 
 h.alt.sub <- h.alt.sub %>% 
   select(-index) %>%
-  mutate(COMID_new = case_when(is.na(COMID_altNA) ~ COMID, 
-                               T ~ COMID_altNA),
-         COMID_orig = COMID) %>%
-  select(-COMID, -COMID_altNA) %>%
-  rename(COMID = COMID_new) %>%
+  mutate(COMID_h_alt_source = case_when(is.na(COMID_altNA) ~ COMID, 
+                                        T ~ COMID_altNA)) %>%
+  select(-COMID_altNA) %>%
   relocate(contains("COMID"), contains("dist"))
 
 write_csv(h.alt.sub, paste0(PATH, "/02_EnvDat/hydrologic_alteration_all_sites.csv"))
@@ -275,7 +273,7 @@ nhd <- nhd[nhd$COMID %in% comids,]
 
 if(file.exists(paste0(PATH, "/02_EnvDat/HUCs_NHDs/nhd_huc_intersection_info.csv"))) { #load intersection info if starting over
   
-  huc_nhd_df <- read_csv(paste0(PATH, "/02_EnvDat/HUCs_NHDs/nhd_huc_intersection_info.csv"), col_types = cols(.default = col_character()))
+  huc_nhd_df <- read_csv(paste0(PATH, "/02_EnvDat/HUCs_NHDs/nhd_huc_intersection_info.csv"), col_types = cols(prop_in_huc = col_number(), .default = col_character()))
   
 } else { #get intersection info if starting over
   
@@ -341,13 +339,14 @@ huc <- huc[huc$huc12 %in% huc_ids, ]
 ### functions ----
 calc_var_diff <- function(x, #variable dataframe that has, at minimum, env variable + time
                           env_var = "air_temp", #column name for variable of interest
-                          site_var = "site_no", #column name for individual sites to group by
+                          site_var = "huc12", #column name for individual sites to group by
                           var2grp = c("year", "season"), #group levels, right now this only works across years, not within a single year
                           norm_comp = TRUE, #calc deficit from normal, departure from normal, percent of normal (all averaged over time)
                           pct_change = TRUE, #average percent change across time for each lowest group
                           delta_var = TRUE, #difference in var from start to end of period, grouped by N years
                           num_yr_start_end = 5, #for difference from start to end of period, how many years to pull from
                           c_var_diff = TRUE, #cumulative change over length of time (essentially length of the trend line)
+                          min_max_diff = TRUE, #difference between max value and min value across time period (magnitude ish)
                           growth_rate = TRUE #growth rate calculated from decomposed time series, not grouped by season or anything
 ) {
   # x <- air_temp #to test
@@ -441,7 +440,7 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
   if(c_var_diff) {
     c_var <- x %>%
       group_by(across(all_of(var2grp))) %>%
-      summarise(ssn_var = mean(.data[[env_var]])) %>% #one seasonal value per year
+      summarise(ssn_var = mean(.data[[env_var]])) %>% #one group value per year
       arrange(across(all_of(var2grp))) %>%
       group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
       mutate(diff_yr = year - lag(year),
@@ -452,10 +451,18 @@ calc_var_diff <- function(x, #variable dataframe that has, at minimum, env varia
     all_res <- all_res %>% left_join(., c_var,  by = names(.)[names(.) %in% names(c_var)])
   }
   
-  #ratio of delta var : cum. var ----
-  if(all(c(delta_var, c_var_diff))) {
-    all_res <- all_res %>%
-      mutate(change_ratio = cdelt_var / delta_var)
+  #min/max diff ----
+  if(min_max_diff) {
+    mmd <- x %>%
+      group_by(across(all_of(var2grp))) %>%
+      summarise(grp_var = mean(.data[[env_var]])) %>%
+      arrange(across(all_of(var2grp))) %>%
+      group_by(across(all_of(var2grp[!grepl("year", var2grp)]))) %>%
+      summarise(min = min(grp_var, na.rm = TRUE),
+                max = max(grp_var, na.rm = TRUE),
+                min_max_diff = max - min)
+    
+    all_res <- all_res %>% left_join(., mmd,  by = names(.)[names(.) %in% names(mmd)])
   }
   
   #growth rate from decomposed time series ----
@@ -550,7 +557,7 @@ bugs <- calc_var_diff(air_temp, env_var = "air_temp", site_var = "huc12",
                       var2grp = c("year", "season"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 bugs <- bugs %>%
   mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)),
@@ -566,7 +573,7 @@ fish <- calc_var_diff(air_temp, env_var = "air_temp", site_var = "huc12",
                       var2grp = c("year", "season"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 fish <- fish %>%
   mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)),
@@ -705,7 +712,7 @@ bugs <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
                       var2grp = c("year", "season"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_ssn_temporal_change_bugs.csv"))
 
@@ -713,7 +720,7 @@ bugs <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
                       var2grp = c("year"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_all_temporal_change_bugs.csv"))
 
@@ -725,7 +732,7 @@ fish <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
                       var2grp = c("year", "season"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 write_csv(fish, paste0(PATH, "/02_EnvDat/precip_ssn_temporal_change_fish.csv"))
 
@@ -733,7 +740,7 @@ fish <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
                       var2grp = c("year"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 write_csv(fish, paste0(PATH, "/02_EnvDat/precip_all_temporal_change_fish.csv"))
 
@@ -782,7 +789,7 @@ bugs <- calc_var_diff(water_temp, env_var = "water_temp", site_var = "site_no",
                       var2grp = c("year", "season"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 bugs <- bugs %>%
   mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
@@ -804,7 +811,7 @@ fish <- calc_var_diff(water_temp, env_var = "water_temp", site_var = "site_no",
                       var2grp = c("year", "season"),
                       norm_comp = TRUE, pct_change = TRUE, 
                       delta_var = TRUE, num_yr_start_end = 5,
-                      c_var_diff = TRUE, growth_rate = TRUE)
+                      c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
 fish <- fish %>%
   mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
@@ -840,7 +847,6 @@ rm(bugs, fish, pred_temp, water_temp)
 }
 
 ##land cover change ----
-
 ###download nlcd data ----
 if(download_nlcd) {
   
@@ -1007,10 +1013,11 @@ nlcd_delt <- calc_var_diff(tmp1, env_var = "nlcd_pct", site_var = "huc12",
                            var2grp = c("year", "nlcd_class"),
                            norm_comp = TRUE, pct_change = TRUE, 
                            delta_var = TRUE, num_yr_start_end = 2,
-                           c_var_diff = TRUE, growth_rate = FALSE)
+                           c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = FALSE)
 
 write_csv(nlcd_delt, paste0(PATH, "/02_EnvDat/nlcd_temporal_change_alltax.csv"))
 
+#prep canopy cover and imperviousness
 tmp2 <- dat_summ %>%
   pivot_longer(contains("pct_"), names_to = "type_year", values_to = "dat_pct") %>%
   mutate(year = gsub(".*_pct_", "", type_year),
@@ -1028,7 +1035,7 @@ tcc_delt <- calc_var_diff(tcc, env_var = "tcc_pct", site_var = "huc12",
                           var2grp = c("year"),
                           norm_comp = TRUE, pct_change = TRUE, 
                           delta_var = TRUE, num_yr_start_end = 2,
-                          c_var_diff = TRUE, growth_rate = FALSE)
+                          c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = FALSE)
 
 write_csv(tcc_delt, paste0(PATH, "/02_EnvDat/tcc_temporal_change_alltax.csv"))
 
@@ -1042,7 +1049,7 @@ imp_delt <- calc_var_diff(imp, env_var = "imp_pct", site_var = "huc12",
                           var2grp = c("year"),
                           norm_comp = TRUE, pct_change = TRUE, 
                           delta_var = TRUE, num_yr_start_end = 2,
-                          c_var_diff = TRUE, growth_rate = FALSE)
+                          c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = FALSE)
 
 write_csv(imp_delt, paste0(PATH, "/02_EnvDat/impervious_temporal_change_alltax.csv"))
 
@@ -1082,80 +1089,67 @@ rm(nlcd_delt, tmp1, nlcd_summ, tmp2, imp, imp_delt, tcc, tcc_delt, dat_summ)
 }
 
 # Variable Summ. + Plots ----
-source("Scripts/XX_colors.R")
-
-flow.link <- lapply(occ.sites, function(x) {
-  x %>%
-    select(COMID, gage_no_15yr, flw_type) %>%
-    rename(site_no = gage_no_15yr)
-})
-flow.link <- bind_rows(flow.link)
-flow.link <- distinct(flow.link)
-
-flow.link <- left_join(flow.link, select(huc_nhd_df, -comid_idx), by = c("COMID" = "comid"))
-
-## stream cat ----
-stream_cat <- read_csv(paste0(PATH, "/02_EnvDat/StreamCat/stream_cat_vars_all_sites.csv"), col_types = cols(COMID = col_character(), .default = col_number()))
-stream_cat <- lapply(occ.sites, function(x) {
-  x %>%
-    select(COMID, flw_type) %>%
-    left_join(., stream_cat)
-})
-
-stream_cat[[1]]$taxa <- "bug"
-stream_cat[[2]]$taxa <- "fish"
-
-stream_cat <- bind_rows(stream_cat)
-
-stream_cat %>%
-  select(-taxa) %>%
-  distinct() %>%
-  ggplot() +
-  geom_density(aes(CLAYWS, fill = flw_type), alpha = 0.6) +
-  scale_y_continuous(expand = c(0,0)) +
-  # geom_boxplot(aes(flw_type, TMAX8110WS, fill = flw_type)) +
-  scale_fill_manual(values = flow.pal) +
-  theme_classic()
-
-## hydro alt ----
-hydro_alt <- read_csv(paste0(PATH, "/02_EnvDat/hydrologic_alteration_all_sites.csv"))
-
-## HIT ----
-hit <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_adjustments_applied.csv"))
-# hit.orig <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240130.csv"))
-
-hit <- lapply(occ.sites, function(x) {
-  x %>%
-    select(gage_no_15yr, flw_type) %>%
-    rename(site_no = gage_no_15yr) %>%
-    left_join(., hit)
-})
-
-hit[[1]]$taxa <- "bug"
-hit[[2]]$taxa <- "fish"
-
-hit <- bind_rows(hit)
-
-hit %>%
-  # select(-taxa) %>%
-  filter(taxa == "fish") %>%
-  distinct() %>%
-  ggplot() +
-  geom_density(aes(dh1, fill = flw_type), alpha = 0.6) +
-  scale_y_continuous(expand = c(0,0)) +
-  # geom_boxplot(aes(flw_type, TMAX8110WS, fill = flw_type)) +
-  scale_fill_manual(values = flow.pal) +
-  theme_classic()
-
-##air temp change ----
-air_temp <- read_csv(paste0(PATH, "/02_EnvDat/air_temp_temporal_change_fish.csv"))
-
-##precip change ----
-
-##stream temp change ----
-stream_temp <- read_csv(paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_fish.csv"))
-
-##land cover change ----
-nlcd <- read_csv(paste0(PATH, "/02_EnvDat/nlcd_temporal_change_alltax.csv"))
-
-nlcd <- left_join(nlcd, flow.link, by = c("huc12" = "huc_id"))
+# source("Scripts/XX_colors.R")
+# 
+# flow.link <- lapply(occ.sites, function(x) {
+#   x %>%
+#     select(COMID, gage_no_15yr, flw_type) %>%
+#     rename(site_no = gage_no_15yr)
+# })
+# flow.link <- bind_rows(flow.link)
+# flow.link <- distinct(flow.link)
+# 
+# flow.link <- left_join(flow.link, select(huc_nhd_df, -comid_idx), by = c("COMID" = "comid"))
+# 
+# ## stream cat ----
+# stream_cat <- read_csv(paste0(PATH, "/02_EnvDat/StreamCat/stream_cat_vars_all_sites.csv"), col_types = cols(COMID = col_character(), .default = col_number()))
+# stream_cat <- lapply(occ.sites, function(x) {
+#   x %>%
+#     select(COMID, flw_type) %>%
+#     left_join(., stream_cat)
+# })
+# 
+# stream_cat[[1]]$taxa <- "bug"
+# stream_cat[[2]]$taxa <- "fish"
+# 
+# stream_cat <- bind_rows(stream_cat)
+# 
+# stream_cat %>%
+#   select(-taxa) %>%
+#   distinct() %>%
+#   ggplot() +
+#   geom_density(aes(CLAYWS, fill = flw_type), alpha = 0.6) +
+#   scale_y_continuous(expand = c(0,0)) +
+#   # geom_boxplot(aes(flw_type, TMAX8110WS, fill = flw_type)) +
+#   scale_fill_manual(values = flow.pal) +
+#   theme_classic()
+# 
+# ## hydro alt ----
+# hydro_alt <- read_csv(paste0(PATH, "/02_EnvDat/hydrologic_alteration_all_sites.csv"))
+# 
+# ## HIT ----
+# hit <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_adjustments_applied.csv"))
+# # hit.orig <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240130.csv"))
+# 
+# hit <- lapply(occ.sites, function(x) {
+#   x %>%
+#     select(gage_no_15yr, flw_type) %>%
+#     rename(site_no = gage_no_15yr) %>%
+#     left_join(., hit)
+# })
+# 
+# hit[[1]]$taxa <- "bug"
+# hit[[2]]$taxa <- "fish"
+# 
+# hit <- bind_rows(hit)
+# 
+# hit %>%
+#   # select(-taxa) %>%
+#   filter(taxa == "fish") %>%
+#   distinct() %>%
+#   ggplot() +
+#   geom_density(aes(dh1, fill = flw_type), alpha = 0.6) +
+#   scale_y_continuous(expand = c(0,0)) +
+#   # geom_boxplot(aes(flw_type, TMAX8110WS, fill = flw_type)) +
+#   scale_fill_manual(values = flow.pal) +
+#   theme_classic()
