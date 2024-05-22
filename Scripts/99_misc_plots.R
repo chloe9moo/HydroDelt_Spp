@@ -137,15 +137,15 @@ occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          gage_no_15yr = col_character(),
                                                          dist2gage_m_15yr = col_number(),
                                                          dist2strm_m_flw = col_number()))
-occ.list <- list(occ.list[[2]])
+# occ.list <- list(occ.list[[2]])
 
 div_list <- read_csv(paste0(PATH, "/98_result_tables/site_div_alltax_alldiv_raw.csv"))
 
 #add COMID and flw type to diversity result
-xy_flw <- list()
+xy_flw <- vector("list", 2)
 for(i in seq_along(occ.list)) {
-  # if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
-  taxa <- "fish"
+  if(i == 1) { taxa <- "bug" } else { taxa <- "fish" }
+  # taxa <- "fish"
   xy_flw[[i]] <- occ.list[[i]] %>% select(site_id, lat, long, COMID, flw_type) %>% mutate(taxa = taxa)
 }
 
@@ -164,7 +164,7 @@ tmp <- div %>%
   filter(!is.na(div_type))
 
 ggplot() +
-  geom_boxplot(data = tmp, aes(x = flw_type, y = value, fill = flw_type), na.rm = T) +
+  geom_boxplot(data = tmp %>% filter(taxa == "fish"), aes(x = flw_type, y = value, fill = flw_type), na.rm = T) +
   # geom_jitter(data = tmp, aes(x = flw_type, y = value), alpha = 0.2, width = 0.3) +
   # facet_grid(div_type ~ taxa, scales = "free") +
   facet_wrap(~ div_type, scales = "free_y") +
@@ -173,6 +173,15 @@ ggplot() +
   theme(axis.title = element_blank())
 ggsave(paste0(PATH, "/99_figures/site_div_fish_boxplot_comp.png"), width = 7, height = 5)
 
+##density plot flow type x diversity ----
+ggplot() +
+  geom_density(data = div, aes(f_disp, fill = flw_type), alpha = 0.6) +
+  facet_wrap(~ taxa) +
+  scale_fill_manual(values = flow.pal, name = "flow type") +
+  xlab("functional dispersion") +
+  theme_bw()
+ggsave(paste0(PATH, "/99_figures/site_div_alltax_density_fdispcomp.png"), width = 8, height = 3)
+
 ## funct ~ rich scatterplot ----
 
 ggplot(data = tmp) +
@@ -180,14 +189,16 @@ ggplot(data = tmp) +
   facet_wrap(~ div_type, scales = "free") 
 
 ggplot(data = filter(div, n_sp > 1), aes(x = n_sp, y = f_disp, color = flw_type)) +
-  geom_point(aes(shape = flw_type), size = 2, alpha = 0.5) +
-  geom_smooth(method = "glm") +
+  geom_point(aes(shape = flw_type), size = 3, alpha = 0.1) +
+  geom_smooth(method = "glm", linewidth = 1.5) +
+  facet_wrap(~ taxa, scales = "free_x") +
   scale_color_manual(values = flow.pal) +
   coord_cartesian(ylim = c(0, 0.26)) +
-  theme_classic() +
+  xlab("number of species per site") + ylab("functional dispersion") +
+  theme_bw() +
   guides(color = guide_legend(override.aes = list(fill = NA, size = 3, alpha = 1)))
 
-ggsave(paste0(PATH, "/99_figures/site_div_fish_rich-v-disp_comp.png"), width = 7, height = 5)
+ggsave(paste0(PATH, "/99_figures/site_div_alltax_rich-v-disp_comp.png"), width = 8, height = 5)
 
 ##map of site diversity ----
 #nhd load in
@@ -220,4 +231,37 @@ ggpubr::ggarrange(p1, p2, nrow = 1)
 
 ggsave(paste0(PATH, "/99_figures/site_div_fish_map_comparison.png"), width = 10, height = 5)
 
+#site diversity relationship ----
+div.sf <- st_as_sf(div %>% filter(taxa == "fish"), coords = c("long", "lat"), crs = 4269) 
 
+#break down relationship into cats
+div.sf <- div.sf %>%
+  mutate(across(.cols = c(n_sp, f_disp),
+                ~ case_when(.x <= quantile(.x, c(0.25)) ~ "low",
+                            .x > quantile(.x, c(0.25)) & .x <= quantile(.x, c(0.50)) ~ "low-med",
+                            .x > quantile(.x, c(0.50)) & .x <= quantile(.x, c(0.75)) ~ "med-high",
+                            .x > quantile(.x, c(0.75)) ~ "high")),
+         across(.cols = c(n_sp, f_disp), ~ factor(.x, levels = c("low", "low-med", "med-high", "high"), ordered = TRUE)),
+         rich_fdisp = interaction(n_sp, f_disp, sep = ":"))
+
+#make legend
+l <- ggplot() +
+  geom_tile(data = div.sf, aes(n_sp, f_disp, fill = rich_fdisp)) +
+  scale_fill_viridis_d() +
+  scale_x_discrete(expand = c(0,0), name = "richness") +
+  scale_y_discrete(expand = c(0,0), name = "functional dispersion") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+#plot
+p1 <- ggplot() +
+  geom_sf(data = hlnd, fill = "lightgrey", color = "black") +
+  geom_sf(data = div.sf, aes(color = rich_fdisp), shape = 19, size = 2.5, alpha = 0.8) +
+  scale_color_viridis_d() +
+  coord_sf(xlim = c(-98, -89)) +
+  theme(panel.border = element_rect(color = "black", fill = NA),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_legend.png"), plot = l, width = 4, height = 4)
+ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_map.png"), plot = p1, width = 6, height = 5)

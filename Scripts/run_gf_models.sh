@@ -1,13 +1,18 @@
 #!/bin/bash
-##SBATCH -N 1
-##SBATCH --ntasks=1
-##SBATCH --mem-per-cpu=80G
-##SBATCH -t 08:00:00
-##SBATCH -J env_filt
-##SBATCH -p normal_q
-##SBATCH --account=usgs_rcs
-##SBATCH --mail-type=BEGIN,END,FAIL
-##SBATCH --mail-user=chloe9mo@vt.edu
+#SBATCH -J gfmodel
+#SBATCH -o gfmodel_%j.txt
+#SBATCH -p cloud72
+#SBATCH -qos cloud
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --time=24:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=voorhees@uark.edu
+
+#on hpc ONLY:
+# module purge
+# module load gcc/9.3.1 mkl/19.0.5 R/4.2.2
+# module list
 
 #variables
 RUNFILE="gradient_forests_rINDEX_NUMBER"
@@ -31,8 +36,8 @@ for flow in "${FLOWTYPES[@]}"; do
 	sed -i "s/VAR_SELECTION_COL/${env}/g" "${RUNFILE}_${flow}_${env}.R" 
 
 	#run R script for flow x site combo
-	# Rscript --vanilla --no-save ./"${flow}_${RUNFILE}"
-	# echo " "
+	Rscript --vanilla ./"${RUNFILE}_${flow}_${env}.R" >> "out_${RUNFILE}_${flow}_${env}.txt" 2>&1
+	echo " "
 	wait
 
 	# rm "${flow}_${RUNFILE}"

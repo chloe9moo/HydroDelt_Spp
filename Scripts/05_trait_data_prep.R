@@ -308,7 +308,7 @@ tmp <- tmp %>%
                                                                            NA, replace_na(.x, 0))))
 
 #pair to spp names
-f.spp <- read_csv(paste0(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long_20240208.csv"))) %>% select(order, family, genus, species) %>% distinct()
+f.spp <- read_csv(paste0(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long.csv"))) %>% select(order, family, genus, species) %>% distinct()
 
 fish.traits <- left_join(f.spp, tmp)
 
@@ -583,11 +583,19 @@ na.check <- i.spp %>%
 
 write_csv(na.check, paste0(PATH, "/20_Traits/trait_dat_bug_miss_dat_list_", gsub("-", "", Sys.Date()), ".csv"))
 
+rm(list = ls())
+
+##bring in missing traits from lit search ----
+
+#TO BE DONE AT A LATER DATE WHEN SEARCH IS COMPLETE
+
 ##pair to species list + fill in missing data ----
+PATH <- getwd()
+
 bug.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_bug.csv")) %>%
   rename(genus = Genus, family = Family, order = Order) %>%
   mutate(join_track = "joined")
-bug <- read_csv(paste0(PATH, "/01_BioDat/occ_bug_inthigh_long_20240208.csv"), col_types = cols(.default = "c")) %>%
+bug <- read_csv(paste0(PATH, "/01_BioDat/occ_bug_inthigh_long.csv"), col_types = cols(.default = "c")) %>%
   select(order, family, subfamily, tribe, genus) %>%
   filter(!(is.na(subfamily) & is.na(tribe) & is.na(genus))) %>%
   mutate(taxa = case_when(tribe == "Aciliini" ~ tribe,
@@ -599,13 +607,14 @@ bug <- read_csv(paste0(PATH, "/01_BioDat/occ_bug_inthigh_long_20240208.csv"), co
   distinct()
 
 #attempt to join traits to species list
+#genus level first
 bug.traits <- left_join(bug, bug.sum, by = c("genus"="genus"), na_matches = "never") %>%
   filter(!is.na(join_track)) %>%
   select(-contains(".y")) %>%
   rename_with(~gsub("\\.x", "", .x))
 
-tmp <- anti_join(bug, bug.traits, by = c("genus"))
-tmp.tr <- anti_join(bug.sum, bug.traits, by = c("genus"))
+tmp <- anti_join(bug, bug.traits, by = c("genus")) #taxa without traits
+tmp.tr <- anti_join(bug.sum, bug.traits, by = c("genus")) #traits not yet joined
 
 tmp.tr <- left_join(tmp, tmp.tr, by = c("taxa"="genus"), na_matches = "never") %>%
   select(-contains(".y")) %>%
@@ -614,53 +623,145 @@ tmp.tr <- left_join(tmp, tmp.tr, by = c("taxa"="genus"), na_matches = "never") %
 bug.traits <- bind_rows(bug.traits, tmp.tr) %>%
 #   filter(!is.na(join_track)) %>%
     select(-join_track)
-# 
-# tmp <- tmp %>% filter(!taxa %in% bug.traits$taxa) %>% distinct()
-# tmp.tr <- anti_join(bug.sum, bug.traits, by = c("genus" = "taxa"))
-  
 
+#essentially, if all values in a category are NA, we can assume we didn't find that variable
+bug.traits <- bug.traits %>%
+  rowwise() %>%
+  mutate(across(contains("troph"), ~ ifelse(all(is.na(c_across(contains("troph")))),
+                                                   NA, replace_na(.x, 0))),
+         across(contains("emerg"), ~ ifelse(all(is.na(c_across(contains("emerg")))),
+                                            NA, replace_na(.x, 0))),
+         across(contains("habit"), ~ ifelse(all(is.na(c_across(contains("habit")))),
+                                            NA, replace_na(.x, 0)))) %>%
+  mutate(habit_crawl = ifelse(habit_crawl == FALSE, 0, NA))
+
+write_csv(bug.traits, paste0(PATH, "/20_Traits/trait_dat_summ_bug_with_updates.csv"))
+
+rm(list = ls())
+
+##fill in missing traits via RF ----
+library(missForest); library(tidyverse)
+
+PATH <- getwd()
+
+bug.traits <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_bug_with_updates.csv"))
+
+#handle duplicates from collapsing down for taxa level
+source(paste0(PATH, "/Scripts/XX_trait_functions.R"))
+bug.traits$taxa[duplicated(bug.traits$taxa)]
+dups <- bug.traits[duplicated(bug.traits$taxa) | duplicated(bug.traits$taxa, fromLast = TRUE),]
+tmp <- dups[, names(dups) %in% c("order", "family", "subfamily", "tribe", "genus", "taxa")] %>% mutate(genus = taxa) %>% distinct()
+dups <- compress_traits(data = dups, "taxa", 
+                c("max_size", "repro_disp", "disp_strength", "gen_num", "therm_pref", 
+                  "synch", "resp_type", "rheo_type", "swim_abil", "desic_tol", "life_span")) %>%
+  mutate(across(matches("troph|emerg|habit"), ~ ifelse(.x > 0, 1, 0)))
+dups <- left_join(tmp, dups)
+
+#add back in
+bug.traits <- bind_rows(bug.traits[!duplicated(bug.traits$taxa) & !duplicated(bug.traits$taxa, fromLast = TRUE),], dups) #should be 10 missing
+
+# #summarize amount of missing data
+# sapply(bug.traits, function(x) round(sum(is.na(x)) / length(x) * 100, digits = 2))
+
+#note: randomforest cannot handle categorical predictors with more than 53 categories, so need to break down for incl. taxa relationships in imputation
+#breaking down based on relationships in higher taxonomic levels 
+#(source: itis.gov, https://bmcecolevol.biomedcentral.com/articles/10.1186/1471-2148-14-52/figures/1)
+bug.traits <- bug.traits %>%
+  mutate(higher_lvl = case_when(#NEOPTERA (INFRACLASS)
+                                order %in% c("Orthoptera", "Plecoptera", "Hemiptera") ~ "Polyneoptera/Paraneoptera",
+                                ##HOLOMETABOLA (SUPERORDER)
+                                order %in% c("Coleoptera", "Hymenoptera", "Megaloptera", "Neuroptera") ~ "Neuropteroidea +",
+                                order %in% c("Diptera", "Lepidoptera", "Trichoptera") ~ "Mecoptera",
+                                #PALAEOPTERA (INFRACLASS)
+                                order %in% c("Ephemeroptera", "Odonata") ~ "Palaeoptera (infraclass)",
+                                T ~ NA)) %>%
+  mutate(across(-c(family, genus, taxa), as.factor))
+#get counts:
 # bug.traits %>%
+#   group_by(higher_lvl) %>%
+#   summarise(unique_fam = n_distinct(family),
+#             unique_taxa = n_distinct(taxa))
+
+bug.list <- split(bug.traits, bug.traits$higher_lvl) #split for meeting randomforest criteria
+
+imputed.results <- lapply(bug.list, function(x) {
+  
+  x$family <- as.factor(x$family)
+  tmp.tr <- as.data.frame(x[, !names(x) %in% c("subfamily", "tribe", "genus", "taxa", "higher_lvl", "index")])
+  
+  #note: if xtfrm error appears, need to restart R and try again
+  imp <- missForest(tmp.tr, #including order+family, as taxonomic relationship var for improved prediction
+                    ntree = 1000, #set to 1000 for full run
+                    variablewise = TRUE,
+                    verbose = TRUE) #return individual var performance or not
+  
+  imp.traits <- bind_cols(x[, names(x) %in% c("subfamily", "tribe", "genus", "taxa", "higher_lvl", "index")], imp$ximp)
+  
+  imp.tr.error <- data.frame(trait = names(imp$ximp), 
+                             error_type = names(imp$OOBerror), 
+                             error_val = imp$OOBerror)
+  
+  res <- list(traits = imp.traits, error = imp.tr.error)
+  
+  return(res)
+  
+})
+
+#bind back together
+imp.traits <- data.frame()
+imp.tr.error <- data.frame()
+for(i in seq_along(imputed.results)) {
+  imp.traits <- bind_rows(imp.traits, imputed.results[[i]][["traits"]])
+  imp.tr.error <- bind_rows(imp.tr.error, imputed.results[[i]][["error"]])
+}
+
+write_csv(imp.traits %>% relocate(order, family, subfamily, tribe, genus, taxa) %>% select(-higher_lvl), paste0(PATH, "/20_Traits/trait_dat_summ_bug_imputed.csv"))
+
+
+imp.tr.error.sum <- imp.tr.error %>%
+  mutate(adj_error = case_when(error_type == "MSE" ~ sqrt(error_val), #RMSE
+                               error_type == "PFC" ~ 1 - error_val)) %>% #Proportion true classification
+  group_by(trait) %>%
+  summarise(mn_error = mean(error_val, na.rm = TRUE),
+            mn_prop_true = mean(adj_error, na.rm = TRUE))
+
+write_csv(imp.tr.error.sum, paste0(PATH, "/20_Traits/impute_trait_error_rates_bug_summ.csv"))
+write_csv(imp.tr.error, paste0(PATH, "/20_Traits/impute_trait_error_rates_bug_raw.csv"))
+
+##fill in missing traits via mean of higher tax. lvls ----
+# cats <- names(bug.traits)[sapply(bug.traits, is.character)]
+# 
+# #since currently only 1, no 0s, assume missing only if genera has whole row missing
+# bug.traits <- bug.traits %>%
 #   mutate(across(everything(), as.character)) %>%
 #   rowwise() %>%
 #   mutate(missing_flag = ifelse(
-#     all(is.na(c_across(matches(names(bug.sum)[!names(bug.sum) %in% c("order", "family", "genus")])))), 
+#     all(is.na(c_across(matches(names(bug.sum)[!names(bug.sum) %in% c("order", "family", "genus")])))),
 #     "F", NA)) %>%
-#   View()
-
-###fill in missing traits via mean of higher tax. lvls ----
-cats <- names(bug.traits)[sapply(bug.traits, is.character)]
-
-#since currently only 1, no 0s, assume missing only if genera has whole row missing
-bug.traits <- bug.traits %>%
-  mutate(across(everything(), as.character)) %>%
-  rowwise() %>%
-  mutate(missing_flag = ifelse(
-    all(is.na(c_across(matches(names(bug.sum)[!names(bug.sum) %in% c("order", "family", "genus")])))),
-    "F", NA)) %>%
-  ungroup() %>%
-  mutate(across(-matches(cats), ~ ifelse(is.na(missing_flag) & is.na(.x), 0, .x)),
-         across(-matches(cats), as.numeric)) %>%
-  select(-missing_flag)
-  
-cats <- cats[!cats %in% c("order", "family", "subfamily", "tribe", "genus", "taxa")]
-
-bug.traits <- bug.traits %>%
-  #fill in across increasingly higher levels
-  replace_na_traits(., "genus", cats) %>%
-  replace_na_traits(., "tribe", cats) %>%
-  replace_na_traits(., "subfamily", cats) %>%
-  replace_na_traits(., "family", cats) %>%
-  replace_na_traits(., "order", cats) %>%
-  select(-c(order, family, subfamily, tribe, genus)) %>%
-  compress_traits(., "taxa", cats)
-
-#update binary vars so that it's either 0 or 1 (by rounding)
-bug.traits <- bug.traits %>%
-  mutate(across(where(is.numeric),
-                ~ round(.x, digits = 0)))
-
-write_csv(bug.traits, paste0(PATH, "/20_Traits/trait_dat_summ_bug_na_removed.csv"))
-
+#   ungroup() %>%
+#   mutate(across(-matches(cats), ~ ifelse(is.na(missing_flag) & is.na(.x), 0, .x)),
+#          across(-matches(cats), as.numeric)) %>%
+#   select(-missing_flag)
+#   
+# cats <- cats[!cats %in% c("order", "family", "subfamily", "tribe", "genus", "taxa")]
+# 
+# bug.traits <- bug.traits %>%
+#   #fill in across increasingly higher levels
+#   replace_na_traits(., "genus", cats) %>%
+#   replace_na_traits(., "tribe", cats) %>%
+#   replace_na_traits(., "subfamily", cats) %>%
+#   replace_na_traits(., "family", cats) %>%
+#   replace_na_traits(., "order", cats) %>%
+#   select(-c(order, family, subfamily, tribe, genus)) %>%
+#   compress_traits(., "taxa", cats)
+# 
+# #update binary vars so that it's either 0 or 1 (by rounding)
+# bug.traits <- bug.traits %>%
+#   mutate(across(where(is.numeric),
+#                 ~ round(.x, digits = 0)))
+# 
+# write_csv(bug.traits, paste0(PATH, "/20_Traits/trait_dat_summ_bug_na_removed.csv"))
+# 
 rm(list = ls())
 
 #ALL TAXA ----
@@ -678,7 +779,7 @@ occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          gage_no_15yr = col_character(),
                                                          dist2gage_m_15yr = col_number(),
                                                          dist2strm_m_flw = col_number()))
-occ.list <- list(occ.list[[2]]) #for now, without imputed bug data
+# occ.list <- list(occ.list[[2]]) #for now, without imputed bug data
 
 #wide traits load in
 file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "trait_dat_summ_(fish|bug)_imputed", full.names = TRUE)
@@ -692,11 +793,13 @@ library(cluster); library(vegan)
 #   lapply(select(x, where(is.character)), unique) #check potential cat levels
 # })
 #for ordinal variables
+##FISH
 oc <- list(
   spawn_freq = c("single", "multiple"), 
   temp_pref = c("cold", "cold/cool", "cool", "cool/warm", "warm") 
   # col_pos = c("Benthic", "Non-benthic") #not ordered
 )
+##BUG
 
 group_res_list <- comp_trait_groups(trait_dat =  traits[[1]][,-c(1:3)], ord_col = oc, max_k = 100)
 
@@ -736,17 +839,31 @@ write_csv(clust.wide[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-a
 write_csv(clust.wide[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance_clust.csv"))
 
 ## site by trait matrices ----
+#FISH
 #convert continuous vars
-fish <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:3)])
+fish <- site_x_trait(occ.list[[2]], traits[[2]][,-c(1:3)])
 
 write_csv(fish[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence_cont2cat.csv"))
 write_csv(fish[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance_cont2cat.csv"))
 
 #don't convert
-fish <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:3)], convert_cont_to_cat = FALSE)
+fish <- site_x_trait(occ.list[[2]], traits[[2]][,-c(1:3)], convert_cont_to_cat = FALSE)
 
 write_csv(fish[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence_cont2mn.csv"))
 write_csv(fish[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance_cont2mn.csv"))
+
+#BUG
+#convert continuous vars
+bug <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:5)])
+
+write_csv(bug[[1]], paste0(PATH, "/20_Traits/site_x_trait_bug_presence-absence_cont2cat.csv"))
+write_csv(bug[[2]], paste0(PATH, "/20_Traits/site_x_trait_bug_abundance_cont2cat.csv"))
+
+#don't convert
+bug <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:5)], convert_cont_to_cat = FALSE)
+
+write_csv(bug[[1]], paste0(PATH, "/20_Traits/site_x_trait_bug_presence-absence_cont2mn.csv"))
+write_csv(bug[[2]], paste0(PATH, "/20_Traits/site_x_trait_bug_abundance_cont2mn.csv"))
 
 # summarize + plot ----
 library(vegan); library(ape)

@@ -1,16 +1,20 @@
-### COMPARE GF MODEL OUTPUTS ###
-#make summary figures for comparing variable types, taxa, gage types etc.
+### EXAMINE + COMPARE GF MODEL OUTPUTS ###
+#make summary tables + figures for comparing variable types, taxa, gage types etc.
 
 library(tidyverse); library(gradientForest)
 options(readr.show_col_types = FALSE)
 
 PATH <- getwd()
 
-dir.date <- "2024_02_21"
-gf.list <- list.files(paste0(PATH, "/10_GFOutput/", dir.date), ".rds", full.names = TRUE)
-
-#set colors for consistency ----
+#set colors for consistency
 source(paste0(PATH, "/Scripts/XX_colors.R"))
+
+#model(s) to examine
+gf.file.list <- list.files(paste0(PATH, "/10_GFOutput/2024_05_03"), "gf_")
+gf.out <- readRDS(paste0(PATH, "/10_GFOutput/2024_05_03"))
+
+
+
 
 # gf_file <- gf.list[[1]] #testing
 

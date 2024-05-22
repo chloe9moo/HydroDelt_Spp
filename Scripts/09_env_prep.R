@@ -563,7 +563,7 @@ bugs <- bugs %>%
   mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)),
          across(matches("norm"), ~ round(.x, digits = 10)))
 
-write_csv(bugs, paste0(PATH, "/02_EnvDat/air_temp_temporal_change_bugs.csv"))
+write_csv(bugs, paste0(PATH, "/02_EnvDat/air_temp_temporal_change_bug.csv"))
   
 ###fish: Jan. 1923 to Jun. 2021 ----
 air_temp <- a_temp %>%
@@ -714,7 +714,7 @@ bugs <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
                       delta_var = TRUE, num_yr_start_end = 5,
                       c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
-write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_ssn_temporal_change_bugs.csv"))
+write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_ssn_temporal_change_bug.csv"))
 
 bugs <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
                       var2grp = c("year"),
@@ -722,7 +722,7 @@ bugs <- calc_var_diff(precip.sub, env_var = "precip", site_var = "huc12",
                       delta_var = TRUE, num_yr_start_end = 5,
                       c_var_diff = TRUE, min_max_diff = TRUE, growth_rate = TRUE)
 
-write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_all_temporal_change_bugs.csv"))
+write_csv(bugs, paste0(PATH, "/02_EnvDat/precip_all_temporal_change_bug.csv"))
 
 ###fish: Jan. 1923 to Jun. 2021 ----
 precip.sub <- precip %>%
@@ -794,7 +794,7 @@ bugs <- calc_var_diff(water_temp, env_var = "water_temp", site_var = "site_no",
 bugs <- bugs %>%
   mutate(across(where(is.numeric) & !matches("norm"), ~ round(.x, digits = 6)))
 
-write_csv(bugs, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_bugs.csv"))
+write_csv(bugs, paste0(PATH, "/02_EnvDat/stream_temp_temporal_change_bug.csv"))
 
 # water_temp %>%
 #   group_by(date, season) %>%

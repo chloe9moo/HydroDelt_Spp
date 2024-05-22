@@ -10,6 +10,7 @@ suppressPackageStartupMessages({
 options(readr.show_col_types = FALSE)
 
 PATH <- getwd()
+# PATH <- paste0(getwd(), "/working_dir") #for testing
 message(paste0("\n\nworking directory: ", PATH, "\n\n"))
 
 #read + prep data ----
@@ -70,6 +71,7 @@ if(any(grepl("all\\|ssn", var.source))) {
   rm(tmp)
 }
 
+#load env variable csvs
 env.list <- lapply(var.source[var.source != "taxa dataset"], function(x) {
   x <- gsub("/02_EnvDat", "", x)
   file.name <- paste0(PATH, x)
@@ -94,6 +96,14 @@ env.list <- lapply(var.source[var.source != "taxa dataset"], function(x) {
   
   return(env.file)
 })
+
+#update variable names for model input (not always necessary but sometimes)
+new.names <- c()
+for(i in seq_along(env.list)) {
+  new.names <- c(new.names, names(env.list[[i]]))
+}
+
+var.names <- new.names[!new.names %in% c("COMID", "huc12", "site_no")]
 
 #combine bio + env dat
 for(i in seq_along(env.list)) {
@@ -134,7 +144,7 @@ if(grepl("abundance", bio.file, ignore.case = TRUE)) {
   set.gf.class <- TRUE
 }
 
-#make function for repeated runs
+#make function for repeated runs (not really necessary here, but keeping anyway for now)
 gf_sub <- function(bio.env.dat = bio.sites, #biological data + env data dataframe
                    bio.type = set.bio.type, #if biological vs. trait data, either "trait" or "taxonomic"
                    species.names = species.list, #species of interest (in case less than the full dataframe)
@@ -149,15 +159,6 @@ gf_sub <- function(bio.env.dat = bio.sites, #biological data + env data datafram
                    trace = TRUE,  
                    nbin = 201,
                    corr.threshold = 0.5) {
-  
-  ##remove sites with < 5 spp ----
-  #WILL NEED TO FIGURE OUT A WAY TO ACCOUNT FOR THIS IN TRAIT DATA - PROB. NEED TO REMOVE BEFORE OR SOMETHING
-  if(bio.type == "taxonomic") {
-    bio.env.dat <-   bio.env.dat %>% 
-      mutate(loc_tot = rowSums(select(., any_of(species.list)))) %>%
-      filter(loc_tot > 5) %>%
-      select(-loc_tot)
-  }
   
   ##subset by flow + reference ----
   #flow
@@ -181,15 +182,14 @@ gf_sub <- function(bio.env.dat = bio.sites, #biological data + env data datafram
   col_rem <- sapply(env_col, function(col) all(col == col[1]))
   env_col <- env_col[, !col_rem]
   
-  ##pull out species ----
+  ##pull out species/trait columns ----
   spp_col <- bio.env.dat[, grepl(paste(species.list, collapse = "|"), colnames(bio.env.dat))]
-  ##- remove species w/ < 10 records
+  
+  ##remove species present at every site or present at none of the sites ----
   if(bio.type == "taxonomic") {
-    spp_col <- spp_col[, colSums(spp_col) >= 10]
-    # ##- remove species w/ < 5% of max collection records?? ##not sure they did this in the end...
-    # spp_col <- spp_col[, colSums(spp_col) >= max(colSums(spp_col))*0.05]
-    ##- remove species present at every site
     spp_col <- spp_col[, colSums(spp_col) != nrow(spp_col)]
+    spp_col <- spp_col[, colSums(spp_col) != 0]
+    # removed_spp <- species.list[!species.list %in% names(spp_col)]
   }
   
   ##set model parameters ----
@@ -248,3 +248,4 @@ saveRDS(gf.out, file = file.name) #save model output to look at later
 message("\nEnd: ", Sys.time(), "\n")
 
 message("\n\nmodel save location: ", file.name, "\n\n")
+

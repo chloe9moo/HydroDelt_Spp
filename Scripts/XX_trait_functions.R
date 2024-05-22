@@ -18,15 +18,15 @@ find_cat_mode <- function(x) {
 # }
 
 #for summarizing to one value per species
-# compress_traits <- function(data, group_var, cat_vars) {
-#   data %>%
-#     { if (!is.na(group_var)) group_by(., !!sym(group_var)) else . } %>%
-#     summarise(across(c(where(is.numeric), -matches("record_ttl_15kbuff")), 
-#                      ~ mean(.x, na.rm = TRUE)),
-#               across(matches(paste0(cat_vars, collapse = "|")), 
-#                      ~ find_cat_mode(.x[!is.na(.x)]))) %>%
-#     ungroup()
-# }
+compress_traits <- function(data, group_var, cat_vars) {
+  data %>%
+    { if (!is.na(group_var)) group_by(., !!sym(group_var)) else . } %>%
+    summarise(across(c(where(is.numeric), -matches("record_ttl_15kbuff")),
+                     ~ mean(.x, na.rm = TRUE)),
+              across(matches(paste0(cat_vars, collapse = "|")),
+                     ~ find_cat_mode(.x[!is.na(.x)]))) %>%
+    ungroup()
+}
 
 #GET TRAIT GROUP CLUSTERS
 #FOR TESTING

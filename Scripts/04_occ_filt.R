@@ -515,16 +515,19 @@ occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
 occ.adj <- lapply(occ.list, function(x) { 
   x %>% 
     mutate(across(contains("dist"), as.numeric)) %>%
-    filter(dist2gage_m_15yr <= 15000 & dist2strm_m_flw <= 5000) %>% #make sure within 15km of a gage + 5 km classified flow line
-    filter(!gage_no_15yr %in% c("06906800", "07020550", "07332500")) %>% #these gages are way off (>15k) from any predicted flow regimes
+    #make sure within 15km of a gage + 5 km classified flow line
+    filter(dist2gage_m_15yr <= 15000 & dist2strm_m_flw <= 5000) %>% 
+    #these gages themselves are way off (>15k) from any predicted flow regimes, remove any sites that are attached to them
+    filter(!gage_no_15yr %in% c("06906800", "07020550", "07332500")) %>% 
     select(matches(c("subfamily", "tribe", "genus", "species")), lat_new, long_new, COMID, flw_type, gage_no_15yr, dist2gage_m_15yr, dist2strm_m_flw) %>%
+    #make stream center the lat long for each site
     rename(lat = lat_new, long = long_new) %>%
     distinct() %>%
     group_by(lat, long, COMID) %>%
+    #make new unique site IDs
     mutate(site_id = paste0("s_", cur_group_id())) %>%
     ungroup()
 }) 
-
 
 fish <- occ.adj[[2]] %>%
   select(-genus) %>%
@@ -534,9 +537,31 @@ fish <- occ.adj[[2]] %>%
          p = 1) %>%
   pivot_wider(names_from = species, values_from = p) %>%
   mutate(across(-c(site_id, COMID, flw_type, gage_no_15yr), ~ ifelse(is.na(.x), 0, .x)))
+#get species list for next steps
+species.list <- names(fish)[!names(fish) %in% c("lat", "long", "COMID", "flw_type", "gage_no_15yr", "site_no", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id", "huc12")] 
+
+##FISH ----
+#remove sites with fewer than 5 spp total to account for surveys targeting specific species
+fish <- fish %>% 
+  mutate(loc_tot = rowSums(select(., any_of(species.list)))) %>%
+  filter(loc_tot > 5) %>%
+  select(-loc_tot)
+
+###remove species that occur at every site (puts out warning from GF) ----
+spp_col <- fish[, grepl(paste(species.list, collapse = "|"), colnames(fish))]
+#if decide to remove species that occur at fewer than 10 sites, uncomment:
+# spp_col <- spp_col[, colSums(spp_col) >= 10]
+
+###remove species present at every site ----
+spp_col <- spp_col[, colSums(spp_col) != nrow(spp_col)]
+removed_spp <- species.list[!species.list %in% names(spp_col)]
+cat("Fish removed: ", removed_spp)
+#add back to site info
+fish <- bind_cols(fish[, !grepl(paste(species.list, collapse = "|"), colnames(fish))], spp_col)
 
 write_csv(fish, paste0(PATH, "/01_BioDat/occ_fish_15k_wide_", gsub("-", "", Sys.Date()), ".csv"))
 
+##BUG ----
 bug_names <- occ.adj[[1]] %>%
   select(subfamily, tribe, genus) %>%
   filter(!(is.na(subfamily) & is.na(tribe) & is.na(genus))) %>%
@@ -574,6 +599,26 @@ bug <- occ.adj[[1]] %>%
   mutate(p = 1) %>%
   pivot_wider(names_from = taxa, values_from = p) %>%
   mutate(across(-c(site_id, COMID, flw_type, gage_no_15yr), ~ifelse(is.na(.x), 0, .x)))
+#for next few steps
+species.list <- names(bug)[!names(bug) %in% c("lat", "long", "COMID", "flw_type", "gage_no_15yr", "site_no", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id", "huc12")] 
+
+
+### remove sites with fewer than 5 spp total to account for surveys targeting specific species ----
+bug <- bug %>% 
+  mutate(loc_tot = rowSums(select(., any_of(species.list)))) %>%
+  filter(loc_tot > 5) %>%
+  select(-loc_tot)
+
+### remove species that occur at every site (puts out warning from GF) ----
+spp_col <- bug[, grepl(paste(species.list, collapse = "|"), colnames(bug))]
+#if decide to remove species that occur at fewer than 10 sites, uncomment:
+# spp_col <- spp_col[, colSums(spp_col) >= 10]
+#remove species present at every site
+spp_col <- spp_col[, colSums(spp_col) != nrow(spp_col)]
+removed_spp <- species.list[!species.list %in% names(spp_col)]
+cat("Inverts removed: ", removed_spp)
+#add back to site info
+bug <- bind_cols(bug[, !grepl(paste(species.list, collapse = "|"), colnames(bug))], spp_col)
 
 write_csv(bug, paste0(PATH, "/01_BioDat/occ_bug_15k_wide_", gsub("-", "", Sys.Date()), ".csv"))
 

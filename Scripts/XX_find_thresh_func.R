@@ -6,8 +6,9 @@ if(!"ggpubr" %in% (.packages())) { cat("warning: package 'ggpubr' is required to
 if(!"gradientForest" %in% (.packages())) { cat("warning: package 'gradientForest' is required to run these functions and is not loaded.\n") }
 if(!"tidyverse" %in% (.packages())) { cat("warning: package 'tidyverse' is required to run these functions and is not loaded.\n") }
 
-#this is modified from gradientForest::split.density.plot.method2 script!
-get_dens_ratio <- function(gf_model, pred_var) { 
+#this is modified from gradientForest::split.density.plot.method2 script and Chen et al. 2023 script
+library(pracma)
+get_var_threshold <- function(gf_model, pred_var) { 
 
   #pull out necessary values
   i <- pred_var
@@ -75,9 +76,9 @@ get_dens_ratio <- function(gf_model, pred_var) {
   dObsNorm <- normalize.density(dObs,imp,integrate=T)
   
   # raw importances I
-  ci <- cumimp(gf.mod, i, standardize=F)   
-  ci$y <- diff(c(0, ci$y))
-  ci <- normalize.histogram(ci, imp, bin=F | !is.binned(gf.mod), nbin=101)
+  # ci <- cumimp(gf_model, i, standardize=F)   
+  # ci$y <- diff(c(0, ci$y))
+  # ci <- normalize.histogram(ci, imp, bin=F | !is.binned(gf_model), nbin=101)
   
   # standardized density f(x) = I(x)/d(x)
   dStd <- dImp
@@ -87,7 +88,19 @@ get_dens_ratio <- function(gf_model, pred_var) {
   
   # get ratio value
   ratio_val <- mean(dStdNorm$y)/mean(dStd$y)
-  return(ratio_val)
+  
+  #get peaks
+  df <- cbind(data.frame(dStdNorm$x), data.frame(dStdNorm$y))
+  fp <- findpeaks(dStdNorm$y)
+  
+  peaks <- data.frame(fp)
+  peaks.sel <- subset(df, dStdNorm.y %in% peaks$X1)
+  peaks.F <- peaks.sel[which(peaks.sel$dStdNorm.y > ratio_val),]
+  
+  thresh.peak <- df[which(df$dStdNorm.y > ratio_val),]
+  pick.thresh <- peaks.F[min(which(peaks.F$dStdNorm.x > quantile(thresh.peak$dStdNorm.x, probs = c(0.05)))), 1]
+  
+  return(pick.thresh)
 }
 
 # this is how the splits density plot is made FYI, ratio was taken from abline:
