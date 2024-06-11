@@ -247,21 +247,29 @@ div.sf <- div.sf %>%
 #make legend
 l <- ggplot() +
   geom_tile(data = div.sf, aes(n_sp, f_disp, fill = rich_fdisp)) +
-  scale_fill_viridis_d() +
+  scale_fill_viridis_d(option = "viridis") +
   scale_x_discrete(expand = c(0,0), name = "richness") +
-  scale_y_discrete(expand = c(0,0), name = "functional dispersion") +
+  scale_y_discrete(expand = c(0,0), name = "functional diversity") +
   theme_classic() +
-  theme(legend.position = "none")
+  theme(legend.position = "none",
+        axis.title = element_text(size = 18),
+        axis.text = element_text(size = 20),
+        axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1))
+l
 
 #plot
 p1 <- ggplot() +
-  geom_sf(data = hlnd, fill = "lightgrey", color = "black") +
-  geom_sf(data = div.sf, aes(color = rich_fdisp), shape = 19, size = 2.5, alpha = 0.8) +
+  geom_sf(data = hlnd, fill = "grey", color = "black", linewidth = 0.6) +
+  geom_sf(data = div.sf, aes(color = rich_fdisp), shape = 19, size = 5, alpha = 0.8) +
   scale_color_viridis_d() +
   coord_sf(xlim = c(-98, -89)) +
-  theme(panel.border = element_rect(color = "black", fill = NA),
+  theme(axis.line = element_line(color = "black"),
+        panel.grid = element_blank(),
+        plot.background = element_blank(),
         panel.background = element_blank(),
+        axis.text = element_text(size = 20),
         legend.position = "none")
+p1
 
-ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_legend.png"), plot = l, width = 4, height = 4)
-ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_map.png"), plot = p1, width = 6, height = 5)
+# ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_legend.png"), plot = l, width = 5, height = 4)
+ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_map.png"), plot = p1, width = 10, height = 9)
