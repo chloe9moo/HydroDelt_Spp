@@ -1,4 +1,5 @@
 ## FLOW CALC + ESTIMATION ##
+## doing this before filtering occurrences b/c need date range of flow data
 
 library(tidyverse); library(sf)
 library(dataRetrieval); library(EflowStats)
@@ -59,18 +60,31 @@ flow.gage <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_flow_ARMOOK_info.csv"),
 
 site_nm <- unique(flow.gage$site_no)
 
-for(i in seq_along(site_nm)) { #pull flow data and save
+#latest date for flow data set
+occ <- read_csv(paste0(PATH, "/01_BioDat/occ_alltax_inthigh_long_20240626.csv"))
+max.date <- max(occ$date, na.rm = TRUE)
+rm(occ)
+
+#pull flow data and save
+for(i in seq_along(site_nm)) { 
   nm <- site_nm[[i]]
   
   if(file.exists(paste0(PATH, "/02_EnvDat/raw_daily_flow/", nm, ".csv"))) { #in case it fails at any point
     message("Flow dat for ", nm, " already exists."); next
   } else {
     
+    #set last pull date
+    end.date <- max(flow.gage[flow.gage$site_no == nm, ]$end_date)
+    
+    if(end.date > max.date) { #if later than occurrence data, then pull up to that date
+      end.date <- max.date
+    }
+    
     tmp.dat <- readNWISdv(siteNumbers = nm,
                           parameterCd = "00060",
                           statCd = "00003",
                           startDate = min(flow.gage[flow.gage$site_no == nm, ]$begin_date),
-                          endDate = max(flow.gage[flow.gage$site_no == nm, ]$end_date))
+                          endDate = end.date)
     
     tmp.dat <- tmp.dat %>%
       mutate(day_diff = Date - lag(Date)) #for removing sites with missing days later
@@ -114,12 +128,28 @@ clip_time <- function(dat, index_index, period_index) {
 #set df for saving info on each site
 site_check <- data.frame(site_no = site_nm, action = NA, 
                          l.max_diff = NA, l.years = NA, l.start_date = NA, l.end_date = NA, #longest period
-                         n.max_diff = NA, n.years = NA, n.start_date = NA, n.end_date = NA) #newest period > 10 yrs
+                         n.max_diff = NA, n.years = NA, n.start_date = NA, n.end_date = NA, #newest period > 10 yrs
+                         neg_val_ct = NA) #number of negative discharge values in the data 
 
 for(i in seq_len(nrow(site_check))) {
   tmp.dat <- read_csv(paste0(PATH, "/02_EnvDat/raw_daily_flow/", site_check$site_no[i], ".csv"), col_types = cols(site_no = col_character()))
   
-  if(max(tmp.dat$day_diff, na.rm = TRUE) <= missing_day_length) { #if whole dataset has no missing consecutive days, keep it all/no change
+  #handle negative discharge values (turn into NAs and then clip around them)
+  if(any(names(tmp.dat) %in% c("X_00060_00003"))) { #don't worry about those INFLOW/OUTFLOW cols, bc not going to use those gages
+    
+    site_check[i, ]$neg_val_ct <- length(which(tmp.dat$X_00060_00003 < 0))
+    if(any(tmp.dat$X_00060_00003 < 0)) {
+      tmp.dat <- tmp.dat %>%
+        mutate(X_00060_00003 = case_when(X_00060_00003 < 0 ~ NA,
+                                         T ~ X_00060_00003)) %>%
+        filter(!is.na(X_00060_00003)) %>%
+        mutate(day_diff = Date - lag(Date))
+    }
+    
+  }
+  
+  #if whole dataset has no missing consecutive days, keep it all/no change
+  if(max(tmp.dat$day_diff, na.rm = TRUE) <= missing_day_length) { 
     site_check$action[i] <- "keep all"
     
     m <- get_flow_dates(tmp.dat)
@@ -179,7 +209,16 @@ for(i in seq_len(nrow(site_check))) {
   } #end else section for > 1 day breaks
 }
 
-site_check <- site_check %>% mutate(across(contains("date"), as.Date))
+site_check <- site_check %>% 
+  mutate(across(contains("date"), as.Date),
+         action = ifelse(!is.na(l.years) & l.years < min_yr_period, "remove", action))
+
+#used to check changes made on 1JUL2024, no major differences besides for those few sites with neg to NA values
+# tmp_check <- left_join(daily_flow_data_info, site_check, by = "site_no")
+# tmp_check <- tmp_check %>% 
+#   mutate(across(ends_with(".x") & is.numeric & -contains("change"), ~ . - get(sub("\\.x", "\\.y", cur_column())), .names = "change_{col}")) %>% 
+#   relocate(matches(names(site_check)))
+
 write_csv(site_check, paste0(PATH, "/02_EnvDat/raw_daily_flow/daily_flow_data_info.csv"))
 
 rm(list = ls())
@@ -191,7 +230,7 @@ PATH <- getwd()
 site_check <- read_csv(paste0(PATH, "/02_EnvDat/raw_daily_flow/daily_flow_data_info.csv"), col_types = cols(site_no = col_character())) %>%
   mutate(across(contains("date"), as.Date))
 
-#which variables to pull with adjusted discharge (+ 0.01)
+#which variables to also pull with adjusted discharge (+ 0.01)
 #redo for (ma4, ma9, ma10, ma11, mh18?, mh19?, fh11?, dh22?, dh23?, dh24?, tl3?, th3?, ra6, ra7) - last two automatic adj. in function
 vars <- c("ma4", "ma9", "ma10", "ma11", "mh18", "mh19", "fh11", "dh22", "dh23", "dh24", "tl3", "th3")
 # vars <- c("ma4", "ma9", "ma10", "ma11", "mh18", "mh19", "fh11", "dh22", "dh23", "dh24", "tl3", "tl4", "ta1", "ta2", "ta3", "th3")
@@ -208,9 +247,16 @@ for(i in seq_len(nrow(site_check))) {
   
   #read in flow dataset prev. downloaded
   site <- site_check$site_no[i]
-  f <- file.path(PATH, "02_EnvDat/raw_daily_flow", 
-                 paste0(site, ifelse(file.exists(file.path(PATH, "/02_EnvDat/raw_daily_flow", paste0(site, "_long.csv"))), #check if clipped file exists
-                   "_long.csv", ".csv")))
+  #check and set which clipped file to load (if exists)
+  if(file.exists(file.path(PATH, "02_EnvDat/raw_daily_flow", paste0(site, "_long.csv")))) {
+    f <- file.path(PATH, "02_EnvDat/raw_daily_flow", paste0(site, "_long.csv"))
+  } else {
+    f <- file.path(PATH, "02_EnvDat/raw_daily_flow", paste0(site, ".csv"))
+  }
+  #if newer clipped file exists, overwrite
+  if(file.exists(file.path(PATH, "02_EnvDat/raw_daily_flow", paste0(site, "_new.csv")))) { 
+    f <- file.path(PATH, "02_EnvDat/raw_daily_flow", paste0(site, "_new.csv"))
+  }
   
   q <- read_csv(f, col_types = cols(site_no = col_character(), Date = col_date(), X_00060_00003 = col_number())) %>%
     mutate(month = format(Date, "%m"), day = format(Date, "%d"))
@@ -302,61 +348,100 @@ for(i in seq_len(nrow(site_check))) {
   hit_df <- bind_rows(hit_df, hit_all)
   
   write_csv(hit_df, paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_", gsub("-", "", Sys.Date()), ".csv"))
+  rm(hit_all, hit_all_2)
   message(round(i/nrow(site_check)*100, 2), "% complete")
 }
 
 error_df <- error_df %>% distinct() %>% filter(!is.na(site_no))
 write_csv(error_df, paste0(PATH, "/02_EnvDat/raw_daily_flow/usgs_gage_hit_errors_", gsub("-", "", Sys.Date()), ".csv"))
 
+#missing sites
+# missing_site <- site_check[!site_check$site_no %in% hit_df$site_no, ]
+
+#prep + save
 hit_df <- hit_df %>%
-  relocate(site_no, hit_start_date, hit_end_date, hit_ttl_yrs)
+  relocate(site_no, hit_start_date, hit_end_date, hit_ttl_yrs) %>%
+  mutate(across(everything(), ~ case_when(is.infinite(.x) ~ NA,
+                                          is.nan(.x) ~ NA,
+                                          T ~ .x)))
 write_csv(hit_df, paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_", gsub("-", "", Sys.Date()), ".csv"))
 
-rm(hit_all, pk.fl, q, q.clean, site.info, tmp, f, fl.t, ind1, ind2, site)
+rm(hit_all, pk.fl, q, q.clean, site.info, tmp, f, fl.t, ind1, ind2, site, hit_all_2, q.clean2)
 
-# get NHD stream code ----
-#assign gages COMIDs
+###summarize missing data + outlier abundance ----
+#pull out hit vars only
+df <- hit_df[, sapply(hit_df, is.numeric) & !names(hit_df) %in% "hit_ttl_yrs"]
+#NAs by site
+na_count <- data.frame(name = hit_df$site_no, type = "site", na_count = NA, na_pct = NA)
+na_count$na_count <- apply(df, 1, function(x) sum(is.na(x)))
+na_count$na_pct <- round((na_count$na_count / ncol(df)) * 100, digits = 2)
+
+#flag outliers by site
+is_outlier <- function(x) {
+  stdev <- sd(x, na.rm = TRUE)
+  m <- mean(x, na.rm = TRUE)
+  return(abs(x - m) > 3 * stdev) #greater than 3 standard deviations = outlier
+}
+outlier_id <- df %>%
+  mutate(across(everything(), ~ is_outlier(.x), .names = "outflag_{col}"),
+         outlier_total = rowSums(across(starts_with("outflag")), na.rm = TRUE),
+         outlier_pct = round(outlier_total / ncol(df) * 100, digits = 2))
+
+write_csv(outlier_id, paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_outlier_summary.csv"))
+
+#add tracking columns to na_count
+na_count$outlier_total <- outlier_id$outlier_total
+na_count$outlier_pct <- outlier_id$outlier_pct
+
+#plotting to check things
+ggplot() +
+  # geom_density(data = df, aes(ma20))
+  # geom_point(data = df %>% filter(!is.na(ma4)), aes(x = ma4, y = ma4_adj), size = 4)
+  geom_boxplot(data = outlier_id, aes(x = "ma4", y = ma4)) +
+  geom_point(data = outlier_id, aes(x = "ma4", y = ma4, color = outflag_ma4))
+
+#NAs by variable
+tmp <- data.frame(name = names(df), type = "HIT", na_count = NA, na_pct = NA)
+tmp$na_count <- apply(df, 2, function(x) sum(is.na(x)))
+tmp$na_pct <- round((tmp$na_count / nrow(df)) * 100, digits = 2)
+
+#outliers across sites within variable
+o <- outlier_id %>%
+  select(contains("outflag")) %>%
+  pivot_longer(everything(), names_to = "name", values_to = "outlier") %>%
+  group_by(name) %>%
+  summarise(outlier_total = sum(outlier, na.rm = TRUE)) %>%
+  mutate(name = gsub("outflag_", "", name),
+         outlier_pct = round(outlier_total / nrow(df) * 100, digits = 2))
+tmp <- left_join(tmp, o)
+
+na_count <- bind_rows(na_count, tmp)
+
+write_csv(na_count, paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_missing_outlier_summary.csv"))
+
+rm(df, o, out, outlier_id, tmp)
+
+# get NHD stream code + flow regime ----
 g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_flow_ARMOOK_info.csv")) %>% #gage location
   filter(site_no %in% hit_df$site_no)
-nhd <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/nhd_clip_state_eco.shp")) %>% #nhd streams prev. clipped to region (good to use clipped because of MEM usage)
-  st_transform(5070)
 
-#convert gage locations to spatial w/ projected crs
-temp.sites <- st_as_sf(g.info %>% select(site_no, dec_lat_va, dec_long_va), coords = c("dec_long_va", "dec_lat_va"), crs = 4269, remove = F)
-alb.sites <- temp.sites %>% st_transform(5070)
+source(paste0(PATH, "/Scripts/XX_strm_flw_info_func.R"))
 
-#assign COMID to each site + calc distance to nearest line (meters)
-nr.line <- st_nearest_feature(alb.sites, nhd, check_crs = TRUE) #find nearest nhd strm
-nhd_near <- nhd[nr.line,]
-g.info$COMID <- nhd_near$COMID #add comid match to sites
-dist <- as.vector(st_distance(alb.sites, nhd_near, by_element = TRUE)) #get distance to nearest nhd strm
-g.info$dist2strm_m_nhd <- dist
-
-#checking distance worked
-# ggplot() +
-#   geom_sf(data = nhd %>% filter(COMID == "22700332")) +
-#   geom_sf(data = alb.sites %>% filter(site_no == "07360800")) +
-#   ggspatial::annotation_scale() +
-#   theme_minimal()
-
-# get flow regime ----
-#assign flow_type to each site + calc distance to nearest line (meters)
-flw <- st_read(dsn = paste0(PATH, "/02_EnvDat/raw_flow_regime_dat/Interior Highlands Natural Flow Regimes.gdb"), layer = "Polylines") %>% select(-PopupInfo) %>%
-  st_transform(5070)
-flw <- flw %>% filter(Flow_type != "BigR")
-nr.line <- st_nearest_feature(alb.sites, flw, check_crs = TRUE) #find nearest strm not river
-flw_near <- flw[nr.line,]
-g.info$flw_name <- flw_near$Name #add strm names
-g.info$flw_type <- flw_near$Flow_type #add flow types
-dist <- as.vector(st_distance(alb.sites, flw_near, by_element = TRUE)) #get distance from site to strm assigned
-g.info$dist2strm_m_flw <- dist
-
-rm(nhd, flw, alb.sites, flw_near, nhd_near, dist, nr.line, temp.sites)
+g.info <- get_strm_flow_info(g.info[, names(g.info) %in% c("site_no", "dec_long_va", "dec_lat_va")], 
+                             id_col = c("site_no"), #for saving site ID
+                             coord_cols = c("dec_long_va", "dec_lat_va"), #in correct order  (x, y)
+                             site_crs = 4269, #crs of the original coordinate data
+                             get_COMID = TRUE,
+                             get_COMID_dist = TRUE,
+                             get_flw_type = TRUE,
+                             get_flw_dist = TRUE)
 
 #save location info
 g.info <- g.info %>%
   left_join(., hit_df %>% select(site_no, contains("hit_"))) %>%
-  mutate(across(contains("dist2strm"), ~ round(.x, digits = 3)))
+  left_join(., na_count %>% filter(type == "site") %>% select(-type), by = c("site_no" = "name")) %>%
+  mutate(across(contains("dist2strm"), ~ round(.x, digits = 3))) %>%
+  rename(hit_na_count = na_count, hit_na_pct = na_pct)
 write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 
 # get HDI of gages ----
@@ -371,14 +456,20 @@ g.ii.hdi <- read_csv(paste0(PATH, "/02_EnvDat/GAGES_II/basinchar_and_report_sept
 
 g.info <- g.info %>%
   left_join(., g.ii, by = c("site_no" = "STAID")) %>%
-  left_join(., g.ii.hdi, by = c("site_no" = "STAID")) %>%
-  select(-c(agency_cd, srs_id, access_cd, medium_grp_cd, parm_grp_cd, loc_web_ds)) 
+  left_join(., g.ii.hdi, by = c("site_no" = "STAID"))
 write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 
+rm(list = ls())
+
+#decide which gages to use ----
+PATH <- getwd()
+
 g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
+out_info <- read_csv(paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_outlier_summary.csv"))
 
+YOU ARE HERE!!! REMOVE HIGH NA GAGES? REMOVE HIGH OUTLIER GAGES (WOULD NEED TO LOOK AT WHICH VARS GOING TO USE)? 
 
-#check + fix errors ----
+#notes on errors from HIT calc----
 #ignore quantile error and inflow/outflow skips
 #freq high throws the error, duration high also, potentially has to do with the all flow 0 values in 1990
 #timing low, timing high
@@ -390,6 +481,8 @@ g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 #             )
 
 #compare to old HIT ----
+# g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
+# hit_df <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240701.csv"))
 # old.hit <- read_csv(paste0(PATH, "/02_EnvDat/Updated_HIT_4.23.a.csv"),
 #                     col_types = cols(STAID_0 = col_character())) %>%
 #   select(-c(FID, STAID...2, STANAME, `Years in Op`, `Reference?`, `Start Date`, `End Date`, STAID...13), -contains("GAGESII"), -contains("Active"))
