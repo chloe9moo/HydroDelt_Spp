@@ -302,7 +302,7 @@ for(i in seq_len(nrow(site_check))) {
     error_df <<- bind_rows(error_df, tmp) #save error for later
   })
   
-  ##calc HIT + 1 for log10 metrics ----
+  ##calc HIT + 0.01 for log10 metrics ----
   q.clean2 <- q.clean %>% mutate(discharge = discharge + 0.01)
   if(!is.null(pk.fl)) {
     fl.t <- get_peakThreshold(q.clean2[c("date", "discharge")], #updated flood recurrence threshold
@@ -333,6 +333,34 @@ for(i in seq_len(nrow(site_check))) {
       filter(indice %in% vars) %>% mutate(indice = paste0(indice, "_adj"))
     hit_all <- bind_rows(hit_all, hit_all_2)
   }
+  
+  ## adjust some variable calculations ----
+  #adjust dl17 (variability in low pulse duration) - returns NA when no events below low pulse occur (high 0 flow sites essentially)
+  #replace with 0 to indicate no low pulse events
+  if(any(is.na(hit_all[hit_all$indice == "dl17", ]$statistic))) {
+    hit_all[hit_all$indice == "dl17", ]$statistic <- 0
+  }
+  
+  #adjust ma24-35 (mean monthly CV) to ignore NA vals, rather than returning an NA value
+  #the MHIT (MATLAB version of the package) did it this way, modified the source code for calc_magAverage
+  if(any(q.clean$discharge == 0)) {
+    ma24.35 <- q.clean %>%
+      mutate(month_val = month(date)) %>%
+      group_by(year_val, month_val) %>%
+      summarise(meanFlow = mean.default(discharge),
+                cvMonth = sd(discharge)/meanFlow) %>%
+      group_by(month_val) %>%
+      summarise(meanCV = mean.default(cvMonth, na.rm = TRUE)) #<< mod here
+    ma24.35 <- round(ma24.35$meanCV * 100, digits = 3)
+    
+    ma24.35 <- data.frame(indice = c(paste0("ma", 24:35)),
+                          statistic = ma24.35,
+                          stringsAsFactors = FALSE)
+    
+    hit_all <- bind_rows(hit_all[!hit_all$indice %in% ma24.35$indice, ], ma24.35)
+    
+    rm(ma24.35)
+  }
 
   #and mag7
   tmp <- calc_magnifSeven(q.clean, yearType = "water", digits = 3)
@@ -357,6 +385,7 @@ write_csv(error_df, paste0(PATH, "/02_EnvDat/raw_daily_flow/usgs_gage_hit_errors
 
 #missing sites
 # missing_site <- site_check[!site_check$site_no %in% hit_df$site_no, ]
+# inf.check <- as.data.frame(which(is.infinite(as.matrix(hit_df[, sapply(hit_df, is.numeric)])), arr.ind = TRUE))
 
 #prep + save
 hit_df <- hit_df %>%
@@ -366,7 +395,7 @@ hit_df <- hit_df %>%
                                           T ~ .x)))
 write_csv(hit_df, paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_", gsub("-", "", Sys.Date()), ".csv"))
 
-rm(hit_all, pk.fl, q, q.clean, site.info, tmp, f, fl.t, ind1, ind2, site, hit_all_2, q.clean2)
+rm(pk.fl, q, q.clean, site.info, tmp, f, fl.t, ind1, ind2, site, q.clean2)
 
 ###summarize missing data + outlier abundance ----
 #pull out hit vars only
@@ -394,11 +423,11 @@ na_count$outlier_total <- outlier_id$outlier_total
 na_count$outlier_pct <- outlier_id$outlier_pct
 
 #plotting to check things
-ggplot() +
-  # geom_density(data = df, aes(ma20))
-  # geom_point(data = df %>% filter(!is.na(ma4)), aes(x = ma4, y = ma4_adj), size = 4)
-  geom_boxplot(data = outlier_id, aes(x = "ma4", y = ma4)) +
-  geom_point(data = outlier_id, aes(x = "ma4", y = ma4, color = outflag_ma4))
+# ggplot() +
+#   # geom_density(data = df, aes(ma20))
+#   # geom_point(data = df %>% filter(!is.na(ma4)), aes(x = ma4, y = ma4_adj), size = 4)
+#   geom_boxplot(data = outlier_id, aes(x = "ma4", y = ma4)) +
+#   geom_point(data = outlier_id, aes(x = "ma4", y = ma4, color = outflag_ma4))
 
 #NAs by variable
 tmp <- data.frame(name = names(df), type = "HIT", na_count = NA, na_pct = NA)
@@ -419,9 +448,10 @@ na_count <- bind_rows(na_count, tmp)
 
 write_csv(na_count, paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_missing_outlier_summary.csv"))
 
-rm(df, o, out, outlier_id, tmp)
+rm(df, o, outlier_id, tmp)
 
 # get NHD stream code + flow regime ----
+##NOTE: if redoing the HIT calc, don't need to do this section and HDI section bc it is attached to gage by site_no, not related to HIT calc
 g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_flow_ARMOOK_info.csv")) %>% #gage location
   filter(site_no %in% hit_df$site_no)
 
@@ -461,13 +491,71 @@ write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 
 rm(list = ls())
 
-#decide which gages to use ----
+#decide which gages // HIT vars to use ----
 PATH <- getwd()
 
 g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
-out_info <- read_csv(paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_outlier_summary.csv"))
 
-YOU ARE HERE!!! REMOVE HIGH NA GAGES? REMOVE HIGH OUTLIER GAGES (WOULD NEED TO LOOK AT WHICH VARS GOING TO USE)? 
+#which gages to keep?
+g.info <- g.info %>%
+  mutate(final_filter = case_when(hit_ttl_yrs < 10 ~ "remove", #some sites after clipping to meet continuous time req. have less than 10 yrs of data now
+                                  dist2strm_m_nhd > 1000 ~ "remove", #if gage is far from NHD stream (> 1 km), (which is used for ID to many env vars), remove
+                                  dist2strm_m_flw > 1000 ~ "remove", #if gage is far from classified flow regimes (> 1 km), remove
+                                  #sites with missing data in target HIT variables
+                                  T ~ "keep"))
+
+table(g.info$flw_type) #evenish distribution of flow types?
+
+#map to look at where gages are bein removed
+#background shapes first
+eco <- st_read(paste0(PATH, "/02_EnvDat/study_extent_shp/"), layer = "ecoreg_l3_interior_highlands_crop")
+armook <- st_as_sf(maps::map("state", c("arkansas", "oklahoma", "missouri"), fill = T, plot = F)) %>%
+  st_transform(., crs = 4269)
+
+sf.g <- g.info %>% st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), crs = 4269) %>% #EPSG 4269 = NAD83
+  mutate(final_filter = factor(final_filter, levels = c("keep", "remove"))) %>%
+  arrange(final_filter)
+ggplot() +
+  geom_sf(data = armook, fill = "lightgray", color = "black") +
+  geom_sf(data = eco, fill = "darkgray", color = "black") +
+  geom_sf(data = sf.g, aes(fill = final_filter, shape = flw_type, size = final_filter)) +
+  scale_shape_manual(values = c(21, 22, 23)) +
+  scale_size_manual(values = c(3, 5)) +
+  theme_bw()
+
+#save for filtering later
+write_csv(g.info, paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
+
+#data for making decisions 
+out_info <- read_csv(paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_outlier_summary.csv"))
+hit <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240702.csv"))
+var_table <- read_csv(paste0(PATH, "/02_EnvDat/environmental_variable_info.csv"))
+na_count <- read_csv(paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_missing_outlier_summary.csv"))
+var_table <- left_join(var_table, na_count, by = c("variable_col_name" = "name"))
+var_table <- var_table[!is.na(var_table$type),]
+
+#which HIT variables to keep?
+out_info$remove_gage <- g.info$final_filter
+df <- out_info %>%
+  filter(remove_gage == "keep") %>%
+  select(matches(paste0("^", var_table[!is.na(var_table$include_hydro_fm24), ]$variable_col_name, "$")),
+         matches(paste0("^", var_table[!is.na(var_table$include_hydro_fm24), ]$variable_col_name, "_adj$")))
+tmp <- data.frame(name = names(df), type = "HIT", na_count = NA, na_pct = NA)
+tmp$na_count <- apply(df, 2, function(x) sum(is.na(x)))
+tmp$na_pct <- round((tmp$na_count / nrow(df)) * 100, digits = 2)
+
+out_info %>%
+  mutate(fm24_na_ct = pmap_int(across(
+    matches(paste0("^", var_table[!is.na(var_table$include_hydro_fm24), ]$variable_col_name, "$"))
+  ), ~ sum(is.na(c(...)))),
+  fm24_na_pct = fm24_na_ct / length(var_table[!is.na(var_table$include_hydro_fm24), ]$variable_col_name) * 100,
+  fm24_na_pct = round(fm24_na_pct, digits = 2)) %>%
+  View()
+
+View(out_info %>% select(ma4, ma4_adj))
+
+#NOTE from 15JUN2024: removing ma4 from variable list, including adjusted ma4 - too many questionable values on edges (e.g., -400000 ???), made edit to 
+##env variable info table under column include_hydro_fm24
 
 #notes on errors from HIT calc----
 #ignore quantile error and inflow/outflow skips
@@ -482,7 +570,7 @@ YOU ARE HERE!!! REMOVE HIGH NA GAGES? REMOVE HIGH OUTLIER GAGES (WOULD NEED TO L
 
 #compare to old HIT ----
 # g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
-# hit_df <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240701.csv"))
+# hit_df <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_metrics_20240715.csv"))
 # old.hit <- read_csv(paste0(PATH, "/02_EnvDat/Updated_HIT_4.23.a.csv"),
 #                     col_types = cols(STAID_0 = col_character())) %>%
 #   select(-c(FID, STAID...2, STANAME, `Years in Op`, `Reference?`, `Start Date`, `End Date`, STAID...13), -contains("GAGESII"), -contains("Active"))

@@ -308,14 +308,21 @@ tmp <- tmp %>%
                                                                            NA, replace_na(.x, 0))))
 
 #pair to spp names
-f.spp <- read_csv(paste0(paste0(PATH, "/01_BioDat/occ_fish_inthigh_long.csv"))) %>% select(order, family, genus, species) %>% distinct()
+##read in final occurrence set with multiple hierarchy incl.
+f.spp <- read_csv(paste0(paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"))) %>%
+  filter(bio_type == "fish") %>% 
+  select(order, family, genus, species) %>% 
+  distinct()
 
 fish.traits <- left_join(f.spp, tmp)
 
 write_csv(fish.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish_with_updates.csv"))
 
 #summarize amount of missing data
+#by trait
 sapply(fish.traits, function(x) round(sum(is.na(x)) / length(x) * 100, digits = 2))
+#by spp
+apply(fish.traits, 1, function(x) round(sum(is.na(x)) / length(x) * 100, digits = 2))
 
 rm(list = ls()) #clean workspace
 
@@ -324,8 +331,7 @@ library(missForest); library(tidyverse)
 
 PATH <- getwd()
 
-fish.traits <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish_with_updates.csv")) %>%
-  filter(!species %in% c("Etheostoma duryi", "Dicentrarchus punctatus", "Phoxinus phoxinus")) #for now
+fish.traits <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish_with_updates.csv"))
 
 #get binary traits
 bi.vars <- sapply(fish.traits, function(x) {
@@ -345,17 +351,29 @@ bi.vars <- names(bi.vars[bi.vars == TRUE])
 fish.traits <- fish.traits %>%
   mutate(across(c(order, family, temp_pref, col_pos, spawn_freq, matches(bi.vars)), as.factor))
 
-tmp <- as.data.frame(fish.traits[,-c(1,3,4)])
+mutate(higher_lvl = case_when(#NEOPTERA (INFRACLASS)
+  order %in% c("Orthoptera", "Plecoptera", "Hemiptera") ~ "Polyneoptera/Paraneoptera",
+  ##HOLOMETABOLA (SUPERORDER)
+  order %in% c("Coleoptera", "Hymenoptera", "Megaloptera", "Neuroptera") ~ "Neuropteroidea +",
+  order %in% c("Diptera", "Lepidoptera", "Trichoptera") ~ "Mecoptera",
+  #PALAEOPTERA (INFRACLASS)
+  order %in% c("Ephemeroptera", "Odonata") ~ "Palaeoptera (infraclass)",
+  T ~ NA)) %>%
+
+tmp <- as.data.frame(fish.traits[,-c(3,4)])
 
 #if xtfrm error appears, need to restart R and try again
-fish.imp <- missForest(tmp, #including family, as taxonomic relationship vars for improved prediction
+fish.imp <- missForest(tmp, #including order+family, as taxonomic relationship vars for improved prediction
                        ntree = 1000, #set to 1000 for full run
                        variablewise = TRUE,
                        verbose = TRUE) #return individual var performance or not
 
-imp.traits <- bind_cols(fish.traits[,c(1,3,4)], fish.imp$ximp)
+imp.traits <- bind_cols(fish.traits[,c(3,4)], fish.imp$ximp)
+imp.traits <- imp.traits %>%
+  relocate(order, family, genus, species) %>%
+  mutate(across(where(is.numeric), ~ round(.x, digits = 4)))
 
-write_csv(imp.traits %>% relocate(order, family, genus, species), paste0(PATH, "/20_Traits/trait_dat_summ_fish_imputed.csv"))
+write_csv(imp.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish_imputed.csv"))
 
 imp.tr.error <- data.frame(trait = names(fish.imp$ximp), 
                            error_type = names(fish.imp$OOBerror), 
@@ -363,7 +381,8 @@ imp.tr.error <- data.frame(trait = names(fish.imp$ximp),
 
 imp.tr.error <- imp.tr.error %>%
   mutate(adj_error = case_when(error_type == "MSE" ~ sqrt(error_val), #RMSE
-                               error_type == "PFC" ~ 1 - error_val)) #Proportion true classification
+                               error_type == "PFC" ~ 1 - error_val), #Proportion true classification
+         across(c(error_val, adj_error), ~ round(.x, digits = 3))) 
 
 write_csv(imp.tr.error, paste0(PATH, "/20_Traits/impute_trait_error_rates_fish.csv"))
 
