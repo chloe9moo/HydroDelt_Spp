@@ -343,7 +343,9 @@ temp.site.info <- temp.site.info %>% select(site_no, Lat, Long, COMID, contains(
 write_csv(temp.site.info, paste0(PATH, "/02_EnvDat/raw_stream_temp/comb_water_monthly_location_info.csv"))
 
 #4. Minimum data exclusion ----
-wtemp <- lapply(list.files(paste0(PATH, "/02_EnvDat/raw_stream_temp"), "comb_water", full.names = TRUE), read_csv)
+f <- list.files(paste0(PATH, "/02_EnvDat/raw_stream_temp"), "comb_water", full.names = TRUE)
+f <- f[!grepl("location_info", f)]
+wtemp <- lapply(f, read_csv)
 names(wtemp) <- c("daily", "monthly", "weekly")
 
 # check <- lapply(wtemp, function(x){
@@ -366,7 +368,7 @@ library(prism); library(terra)
 
 #load hit dates 
 hit.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
-hit.info <- hit.info[, names(hit.info) %in% c("site_no", "dec_long_va", "dec_lat_va", "hit_start_date", "hit_end_date")]
+hit.info <- hit.info[names(hit.info) %in% c("site_no", "dec_long_va", "dec_lat_va", "hit_start_date", "hit_end_date")]
 
 #set prism download directory
 prism_set_dl_dir(paste0(PATH, "/02_EnvDat/raw_air_temp/prism"))
@@ -385,11 +387,14 @@ get_prism_monthlys(type = "tmean",
                    keepZip = TRUE, #can remove the unzipped files after clipping
                    keep_pre81_months = TRUE)
 
-#get lat long of all gages for clipping
+#get lat long of all gages + bio sites for clipping
+occ.sites <- read_csv(paste0(PATH, "/01_BioDat/sites_alltax_inthigh_allinfo_20240717.csv")) %>% 
+  select(long, lat) %>% rename(Long = long, Lat = lat) %>% distinct()
 coords <- wtemp[["monthly"]] %>% select(Lat, Long) %>% distinct()
 coords <- bind_rows(
   coords,
-  hit.info %>% select(dec_lat_va, dec_long_va) %>% rename(Lat = dec_lat_va, Long = dec_long_va)
+  hit.info %>% select(dec_lat_va, dec_long_va) %>% rename(Lat = dec_lat_va, Long = dec_long_va),
+  occ.sites
 )
 coords <- st_as_sf(coords, coords = c("Long", "Lat"), crs = 4269)
 coords <- st_bbox(coords)
@@ -418,24 +423,29 @@ for(i in seq_along(prism.list)) {
 }
 
 #plot check
-# tmp <- rast(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters/", rast_name, "_clipped.tif"))
-# # # plot(prism.rast)
-# # # plot(prism.c)
-# plot(tmp)
-# # # # plot(hlnd$geom, add = TRUE)
-# plot(coords$geometry, add = TRUE)
+rast_name <- "PRISM_tmean_stable_4kmM3_200709_bil"
+tmp <- rast(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters/", rast_name, "_clipped.tif"))
+# # plot(prism.rast)
+# # plot(prism.c)
+plot(tmp)
+# # # plot(hlnd$geom, add = TRUE)
+plot(coords$geometry, add = TRUE)
 
 #6. Extract temperature values for regression prep ----
 #get lat long of for value extracting
+occ.sites <- read_csv(paste0(PATH, "/01_BioDat/sites_alltax_inthigh_allinfo_20240717.csv")) %>%
+  select(site_id_new, long_new, lat_new) %>% rename(site_no = site_id_new, Long = long_new, Lat = lat_new) %>% distinct()
 coords <- wtemp[["monthly"]] %>% select(site_no, Lat, Long) %>% distinct()
 coords <- bind_rows(
   coords,
-  hit.info %>% select(site_no, dec_lat_va, dec_long_va) %>% rename(Lat = dec_lat_va, Long = dec_long_va)
+  hit.info %>% select(site_no, dec_lat_va, dec_long_va) %>% rename(Lat = dec_lat_va, Long = dec_long_va),
+  occ.sites
 )
 coords <- distinct(coords)
 
 #get list of clipped rasters
 prism.list <- list.files(paste0(PATH, "/02_EnvDat/raw_air_temp/prism/clipped_rasters"))
+prism.list <- prism.list[!grepl("_ppt_", prism.list)] #exclude precip data
 
 #set dataframe
 a_temp <- data.frame()
@@ -461,6 +471,7 @@ for(i in seq_along(prism.list)) {
   
 }
 
-write_csv(a_temp, paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_strm_gage_sites.csv"))
+write_csv(a_temp, paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_gage_bio_sites.csv"))
 
 # rm(a_temp, a_temp1, coords, prism.rast, prism.c, max, min, rast_name, date, date_vect) #clean up env
+# a_temp <- read_csv(paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_strm_gage_sites.csv"))

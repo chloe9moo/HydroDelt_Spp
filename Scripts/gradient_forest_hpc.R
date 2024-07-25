@@ -4,10 +4,13 @@
 
 suppressPackageStartupMessages({
   library(tidyverse)
-  library(gradientForest)
+  # library(gradientForest) ##local
+  library(gradientForest, lib.loc = "/scrfs/storage/voorhees/home/R/x86_64-pc-linux-gnu/4.2")
 })
 
 options(readr.show_col_types = FALSE)
+
+#sessionInfo()
 
 PATH <- getwd()
 # PATH <- paste0(getwd(), "/working_dir") #for testing
@@ -21,18 +24,22 @@ huc_nhd_df <- read_csv(paste0(PATH, "/nhd_huc_intersection_info.csv"), col_types
 bio.file <- "/BIO_FILE_HERE"
 bio.sites <- read_csv(paste0(PATH, bio.file), col_types = cols(COMID = col_character()))
 
+##for testing
+#print(head(bio.sites))
+#stop("TESTING STOP, FILES LOADED")
+
 #fix names
 names(bio.sites) <- gsub("-", "_", names(bio.sites))
 
-if(any(names(bio.sites) == "gage_no_15yr")) {
-  names(bio.sites)[names(bio.sites) == "gage_no_15yr"] <- "site_no"
+if(any(names(bio.sites) == "flw_gage_no")) {
+  names(bio.sites)[names(bio.sites) == "flw_gage_no"] <- "site_no"
 }
 
 #add in watershed info for later joining
 bio.sites <- left_join(bio.sites, huc_nhd_df[, names(huc_nhd_df) %in% c("comid", "huc_id")], by = c("COMID" = "comid")) %>%
   rename(huc12 = huc_id)
 
-species.list <- names(bio.sites)[!names(bio.sites) %in% c("lat", "long", "COMID", "flw_type", "gage_no_15yr", "site_no", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id", "huc12")] 
+species.list <- names(bio.sites)[!names(bio.sites) %in% c("lat", "long", "COMID", "flw_type", "flw_gage_no", "site_no", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id", "huc12")] 
 
 #env dat
 env.info <- read_csv(paste0(PATH, "/environmental_variable_info.csv"))
@@ -41,6 +48,8 @@ env.info <- env.info[env.info$VAR_SELECTION_COL == "yes" & !is.na(env.info$VAR_S
 env.type <- gsub("include_", "", "VAR_SELECTION_COL")
 
 var.names <- env.info$variable_col_name
+
+if(any(grepl("lat|long", var.names))) { lat_long_var <- TRUE } else { lat_long_var <- FALSE } #for adding lat/long as predictor variable later
 
 #select + adjust variable source needed (where necessary)
 var.source <- unique(env.info$variable_source)
@@ -77,7 +86,7 @@ env.list <- lapply(var.source[var.source != "taxa dataset"], function(x) {
   file.name <- paste0(PATH, x)
   env.file <- read_csv(file.name)
   env.file <- env.file %>% mutate(across(matches("COMID|site_no|huc12"), as.character))
-  env.file <- env.file[, names(env.file) %in% c(var.names, "huc12", "season", "nlcd_class", "COMID", "site_no")]
+  env.file <- env.file[, names(env.file) %in% c(var.names, "huc12", "season", "nlcd_class", "COMID", "site_no", "site_id")]
   
   if(any(names(env.file) %in% c("season", "nlcd_class"))) {
     env.file <- env.file %>%
@@ -94,6 +103,8 @@ env.list <- lapply(var.source[var.source != "taxa dataset"], function(x) {
     }
   })]
   
+  env.file <- distinct(env.file)
+  
   return(env.file)
 })
 
@@ -103,11 +114,52 @@ for(i in seq_along(env.list)) {
   new.names <- c(new.names, names(env.list[[i]]))
 }
 
-var.names <- new.names[!new.names %in% c("COMID", "huc12", "site_no")]
+var.names <- new.names[!new.names %in% c("COMID", "huc12", "site_no", "site_id")]
+
+if(lat_long_var) { var.names <- c("lat", "long", var.names) }
 
 #combine bio + env dat
+##set dataframe stop check (didn't lose anything during join)
+ncol_bio <- length(unique(c(names(bio.sites), var.names)))
+nrow_bio <- nrow(bio.sites)
+
+huc.sites <- bio.sites[grepl("\\|", bio.sites$huc12), ] #pull out now for later
+bio.sites <- bio.sites[!grepl("\\|", bio.sites$huc12), ]
+
+#join regular sites, with single watershed overlap
 for(i in seq_along(env.list)) {
   bio.sites <- left_join(bio.sites, env.list[[i]])
+}
+
+##deal with nhd streams that overlap more than 1 huc
+if(nrow(huc.sites) != 0) {
+  #retain huc combo string for joining back later
+  bio <- huc.sites[, !names(huc.sites) %in% c("huc12", "COMID", "site_no")]
+  ids <- huc.sites[, names(huc.sites) %in% c("site_id", "huc12")]
+  
+  huc.sites <- huc.sites %>%
+    select(site_id, huc12, COMID, site_no) %>%
+    separate_longer_delim(huc12, "|")
+  
+  for(i in seq_along(env.list)) {
+    huc.sites <- left_join(huc.sites, env.list[[i]])
+  }
+  
+  #find average for sites across env vars, add combo HUC string back in, add spp data back in
+  huc.sites <- huc.sites %>%
+    select(-huc12) %>%
+    group_by(site_id, COMID, site_no) %>%
+    summarise(across(everything(), ~ mean(.x, na.rm = TRUE))) %>%
+    ungroup() %>%
+    mutate(across(where(is.numeric), ~ ifelse(is.nan(.x), NA, .x))) %>%
+    left_join(., ids) %>%
+    left_join(., bio)
+  
+  bio.sites <- bind_rows(bio.sites, huc.sites)
+}
+
+if(nrow(bio.sites) != nrow_bio | ncol(bio.sites) != ncol_bio) { 
+  stop("lost sites or columns during env x bio join step...")
 }
 
 #run GF models ----
@@ -171,7 +223,10 @@ gf_sub <- function(bio.env.dat = bio.sites, #biological data + env data datafram
   
   ##set up env vars ----
   ##- remove NA env var rows
-  # na.env <- bio.env.dat %>% filter(if_any(all_of(env.variable.names), is.na))
+  na.env <- bio.env.dat %>% filter(if_any(all_of(env.variable.names), is.na)) #%>% select(any_of(env.variable.names))
+  print(apply(na.env %>% select(any_of(env.variable.names)), 2, function(x) sum(is.na(x)))) #check where NAs are coming from (is one var more of a culprit?)
+  message("Removing ", nrow(na.env), " sites due to NA values in env. vars...\n")
+  
   bio.env.dat <- bio.env.dat %>% filter(!if_any(all_of(env.variable.names), is.na))
 
   env_col <- bio.env.dat[, grepl(paste(paste0("^", env.variable.names, "$"), collapse = "|"), colnames(bio.env.dat))]
@@ -225,7 +280,7 @@ message("\nRunning ", bio, " x ", set.bio.type, " x ", bio.name, " x ", flow.opt
 file.name <- paste0(PATH,  "/output/gf_", bio, "_", set.bio.type, "_", bio.name, "_", flow.opt, "_", env.type, ".rds")
 
 # message("included variables are: ", paste0(var.names, sep = ", "))
-# message("included species units are: ", paste0(species.list, sep = ", "))
+# message("included taxa units are: ", paste0(species.list, sep = ", "))
 message("\nStart: ", Sys.time(), "\n")
 
 gf.out <- gf_sub(bio.env.dat = bio.sites, #biological data + env data dataframe

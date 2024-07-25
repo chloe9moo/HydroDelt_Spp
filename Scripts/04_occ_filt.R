@@ -505,12 +505,22 @@ final.dat <- final.dat %>%
 #remove 'not in region' fishes
 final.dat <- final.dat %>%
   filter(!taxa_name %in% c("Dicentrarchus punctatus", "Erimystax dissimilis", "Etheostoma duryi", "Lepomis punctatus", "Macrhybopsis aestivalis",
-                           "Notropis chrosomus", "Notropis rubellus", "Phoxinus phoxinus"))
+                           "Notropis chrosomus", "Notropis rubellus", "Phoxinus phoxinus")) %>%
+  #stupid errors i missed >:(
+  mutate(order = case_when(species == "Ambloplites ariommus" ~ "Perciformes",
+                           T ~ order))
 
 ##save final dataset (long format)
 write_csv(final.dat, paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_", gsub("-", "", Sys.Date()), ".csv"))
+write_csv(final.dat, paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"))
 
 ##wide format data ----
+final.dat <- read_csv(paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"), col_types = cols(lat = col_number(),
+                                                                                                          long = col_number(),
+                                                                                                          taxa_count = col_number(),
+                                                                                                          dist2strm_m_nhd = col_number(),
+                                                                                                          .default = "c"))
+
 #prep function
 widen_final_occ <- function(occ_dat, bio_target) {
   

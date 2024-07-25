@@ -196,14 +196,14 @@ site_x_trait <- function(site_dat, #wide format site data
                          trait_dat, #trait data, no NAs, only species name and traits
                          tax_col_name = c("taxa", "species"), #column location for taxa ID name
                          ignore_cols = c("lat", "long", "COMID", "flw_type", 
-                                       "gage_no_15yr", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id"), #site cols to ignore
+                                       "flw_gage_no", "dist2gage_m_15yr", "dist2strm_m_flw", "site_id"), #site cols to ignore
                          convert_cont_to_cat = TRUE, #convert continuous traits to categorical
                          match_spp_across_dat = TRUE, #filter spp to match within each dataset (spp in traits will = spp in occ, LCD type of thing)
                          matrix_type = c("presence/absence", "abundance")) 
 {
   #prep site matrix for joining to traits
   o <- site_dat %>%
-    mutate(tot_tax = rowSums(select(., -all_of(ignore_cols)))) %>% #for later
+    mutate(tot_tax = rowSums(select(., -any_of(ignore_cols)))) %>% #for later
     pivot_longer(cols = -c(tot_tax, any_of(ignore_cols)), names_to = "taxa", values_to = "p") %>%
     filter(p == 1) %>%
     select(-p)

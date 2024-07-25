@@ -6,21 +6,20 @@ options(readr.show_col_types = FALSE)
 PATH <- getwd()
 
 file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
-occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
-                                                         long = col_number(),
+occ.list <- lapply(file.list, read_csv, col_types = cols(COMID = col_character(),
                                                          site_id = col_character(),
-                                                         COMID = col_character(),
-                                                         gage_no_15yr = col_character(),
-                                                         dist2gage_m_15yr = col_number(),
-                                                         dist2strm_m_flw = col_number())) 
+                                                         flw_type = col_character(),
+                                                         flw_gage_no = col_character(),
+                                                         .default = "n")) 
 # occ.list <- list(occ.list[[2]])
 
-file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "imputed", full.names = TRUE)
+file.list <- list.files(paste0(PATH, "/20_Traits"), pattern = "imputed", full.names = TRUE)
+file.list <- file.list[!grepl("_raw", file.list)]
 traits <- lapply(file.list, read_csv)
 
 #site richness ----
 rich_res <- lapply(occ.list, function(x) {
-  t_names <- names(x)[!names(x) %in% c("lat", "long", "site_id", "COMID", "flw_type", "gage_no_15yr", "dist2gage_m_15yr", "dist2strm_m_flw")]
+  t_names <- names(x)[!names(x) %in% c("COMID", "site_id", "long", "lat", "flw_type", "flw_gage_no")]
   
   tmp <- x %>%
     mutate(rich = rowSums(select(., all_of(t_names)), na.rm = TRUE)) %>%

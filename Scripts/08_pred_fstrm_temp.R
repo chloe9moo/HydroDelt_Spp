@@ -12,7 +12,7 @@ library(tidyverse); library(sf)
 PATH <- getwd()
 
 #1. Calculate least-squares linear regression for each site to predict stream temperature from air temperature ----
-a_temp <- read_csv(paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_strm_gage_sites.csv"), 
+a_temp <- read_csv(paste0(PATH, "/02_EnvDat/raw_air_temp/prism_monthly_temp_at_gage_bio_sites.csv"), 
                    col_types = cols(site_no = col_character(), Lat = col_character(), Long = col_character(),
                                     .default = col_number()))
 
@@ -41,6 +41,7 @@ r_list <- lapply(c_temp, function(df) {
   return(lsr)
 })
 saveRDS(r_list, paste0(PATH, "/02_EnvDat/fine_scale_temp_regressions.rds"))
+# r_list <- readRDS(paste0(PATH, "/02_EnvDat/fine_scale_temp_regressions.rds"))
 
 ##plot to look at regression ----
 plot_temp_regression <- function(model_list = r_list, site_no, comb_df_list = c_temp) {
@@ -104,10 +105,12 @@ for(i in 1:length(r_list)) {
 lm_res <- lm_res %>%
   mutate(across(where(is.numeric), ~ round(.x, digits = 3)))
 write_csv(lm_res, paste0(PATH, "/02_EnvDat/fine_scale_temp_regression_results.csv"))
+# lm_res <- read_csv(paste0(PATH, "/02_EnvDat/fine_scale_temp_regression_results.csv"))
 
 rm(l1, i)
 
 # predict stream temp at ungaged sites ----
+##get location of water temp gages
 g.info <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/comb_water_monthly_location_info.csv")) %>%
   filter(!is.na(Lat)) %>%
   st_as_sf(., coords = c("Long", "Lat"), remove = FALSE, crs = 4269)
@@ -120,23 +123,48 @@ pred_list <- pred_list[keep]
 
 #find which sites need predicted stream temp, get available strm dates
 hit.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv")) %>%
-  st_as_sf(., coords = c("dec_long_va", "dec_lat_va"), remove = FALSE, crs = 4269)
+  rename(long = dec_long_va, lat = dec_lat_va)
+occ.sites <- read_csv(paste0(PATH, "/01_BioDat/sites_alltax_inthigh_allinfo_20240717.csv")) %>%
+  select(site_id_new, long_new, lat_new, flw_type) %>% rename(site_no = site_id_new, long = long_new, lat = lat_new) %>% distinct()
+##combine
+hit.info <- bind_rows(
+  hit.info,
+  occ.sites
+)
+hit.info <- hit.info %>% st_as_sf(., coords = c("long", "lat"), remove = FALSE, crs = 4269)
 
 #get distance to nearest water temp gage within same flow type
 lm.sites <- g.info[g.info$site_no %in% names(pred_list),]
-nr.site <- st_nearest_feature(hit.info, lm.sites, check_crs = TRUE) #find nearest model source
-lm_near <- lm.sites[nr.site,]
-hit.info$strm_lm_site_no <- lm_near$site_no #add site no to match sites
+##split by flow regime
+hit.split <- split(hit.info, hit.info$flw_type)
+hit.split[[4]] <- hit.info #if decide to not use flow for regression decision
 
-##get distance
-dist <- as.vector(st_distance(hit.info, lm_near, by_element = TRUE)) #get distance to nearest nhd strm
-hit.info$dist2strm_temp_m <- round(dist, digits = 2)
+hit.split <- lapply(hit.split, function(x) {
+  
+  flw_target <- unique(x$flw_type)
+  lm.sub.sites <- lm.sites[lm.sites$flw_type %in% flw_target, ]
+  
+  nr.site <- st_nearest_feature(x, lm.sub.sites, check_crs = TRUE) #find nearest model source
+  lm_near <- lm.sub.sites[nr.site,]
+  x$strm_lm_site_no <- lm_near$site_no #add site no to match sites
+  
+  ##get distance
+  dist <- as.vector(st_distance(x, lm_near, by_element = TRUE)) #get distance to nearest temp gage
+  x$dist2strm_temp_m <- round(dist, digits = 2)
+  
+  return(x)
+  
+})
 
-write_csv(hit.info, paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_info_with_strm_temp_info.csv"))
+flow_lm <- bind_rows(hit.split[1:3])
+write_csv(st_drop_geometry(flow_lm), paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_and_bio_info_with_strm_temp_info_flowmatch.csv"))
 
-rm(lm_near, nr.site, dist, keep)
+write_csv(st_drop_geometry(hit.split[[4]]), paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_and_bio_info_with_strm_temp_info_noflowmatch.csv"))
 
 ##predict stream temp using nearest gage
+# hit.info <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_and_bio_info_with_strm_temp_info_flowmatch.csv"))
+hit.info <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_and_bio_info_with_strm_temp_info_noflowmatch.csv"))
+
 pred_temp <- data.frame()
 for(i in seq_len(nrow(hit.info))) {
   
@@ -145,7 +173,7 @@ for(i in seq_len(nrow(hit.info))) {
   
   lm <- r_list[names(r_list) == lm_site_no][[1]] #regression from nearest gage
   
-  lm.w_temp <- c_temp[[lm_site_no]] %>% #get dates of water temp from regression
+  lm.w_temp <- c_temp[[lm_site_no]] %>% #get dates of water temp from regression (list of combined air/water df)
     mutate(date = as.Date(paste(year, month, "1", sep = "-")))
   
   sub.a_temp <- a_temp[a_temp$site_no == site_no, ] %>%
@@ -182,8 +210,27 @@ rm(site_no, lm_site_no, lm, sub.a_temp, lm.w_temp)
 write_csv(pred_temp, paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly.csv"))
 
 #predict stream temp for change over time ----
-#monthly stream temp at each site from 1923 to 2022
-hit.info <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_info_with_strm_temp_info.csv"))
+##get date range of occ sites ----
+#unique sites ids in final filtered, wide data
+f <- list.files(paste0(PATH, "/01_BioDat"), "_filtered_wide", full.names = TRUE)
+f <- lapply(f, read_csv)
+f <- bind_rows(f) %>% 
+  select(site_id) %>%
+  distinct()
+
+#data with dates still included
+occ <- read_csv(paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"))
+occ <- occ[occ$site_id %in% f$site_id, ] #filter to final site_ids
+occ %>%
+  mutate(min_date = pmin(date, date_min, date_max, na.rm = TRUE),
+         max_date = pmin(date, date_min, date_max, na.rm = TRUE)) %>%
+  summarise(min_date = min(min_date, na.rm = TRUE),
+            max_date = max(max_date, na.rm = TRUE)) 
+###1925 - 2023
+
+#monthly stream temp at each site from 1925 to 2022
+# hit.info <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_and_bio_info_with_strm_temp_info_flowmatch.csv"))
+hit.info <- read_csv(paste0(PATH, "/02_EnvDat/raw_stream_temp/usgs_gage_and_bio_info_with_strm_temp_info_noflowmatch.csv"))
 r_list <- readRDS(paste0(PATH, "/02_EnvDat/fine_scale_temp_regressions.rds"))
 
 ##predict stream temp using nearest gage
@@ -197,7 +244,7 @@ for(i in seq_len(nrow(hit.info))) {
   
   sub.a_temp <- a_temp[a_temp$site_no == site_no, ] %>%
     mutate(date = as.Date(paste(year, month, "1", sep = "-"))) %>%
-    filter(date <= as.Date("2022-01-31") & date >= as.Date("1923-01-01")) %>%
+    filter(date <= as.Date("2022-12-31") & date >= as.Date("1925-01-01")) %>%
     arrange(date)
   
   sub.a_temp$water_temp <- predict(lm, newdata = sub.a_temp["air_temp"]) #predict stream temp
@@ -227,13 +274,15 @@ for(i in seq_len(nrow(hit.info))) {
   
   pred_temp <- bind_rows(pred_temp, sub.a_temp)
   
+  message(round(i/nrow(hit.info)*100, 2), "% complete..")
+  
 }
 rm(site_no, lm_site_no, lm, sub.a_temp, lm.w_temp)
 
 write_csv(pred_temp, paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly_envchange.csv"))
 
 # summarize stream temp values ----
-#occ data goes from 1900 to 2022
+#occ data goes from 1925 2023 (jan), but the temp data only goes from 1996 - 2024
 pred_temp <- read_csv(paste0(PATH, "/02_EnvDat/predicted_stream_temps_monthly.csv"))
 
 tmp <- pred_temp %>%

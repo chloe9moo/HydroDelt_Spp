@@ -13,17 +13,19 @@ BIOSITES_FILES=(
   # "20_Traits/site_x_trait_bug_abundance_cont2cat.csv"
   # "20_Traits/site_x_trait_bug_abundance_clust.csv"
   #taxonomic
-  "01_BioDat/occ_fish_15k_wide_20240510.csv"
-  "01_BioDat/occ_bug_15k_wide_20240510.csv"
+  "01_BioDat/occ_fish_filtered_wide_20240718.csv"
+  "01_BioDat/occ_bug_filtered_wide_20240718.csv"
   )
 #changing these here so that the sbatch shell script doesn't need to be edited directly
-ENVVARS='"include_baseline" "include_baseline_arch" "include_alt" "include_hydro"' #columns from environmental_variable_info.csv
-FLOWTYPES='"Int" "RO" "GW"'
-# ENVVARS="include_alt"
-# FLOWTYPES="Int"
+# ENVVARS='"include_baseline" "include_alt" "include_hydro_fm24" "include_lulc' #columns from environmental_variable_info.csv
+# FLOWTYPES='"Int" "RO" "GW"'
+ENVVARS="include_lulc"
+FLOWTYPES="Int"
 
 #make working directory & output spots
 mkdir ../gf_run_outputs
+mkdir ../gf_run_outputs/run_scripts
+
 mkdir ../working_dir
 mkdir ../working_dir/01_BioDat
 mkdir ../working_dir/20_Traits
@@ -44,8 +46,8 @@ sed -i "s/SET_FLOW_TYPE/${FLOWTYPES}/" run_gf_models.sh
 #for loop through all site files want to run
 for ind in "${!BIOSITES_FILES[@]}"; do
   
-  RUNFILE="gf_run${ind}.sh"
-  # RUNFILE="gf_run${ind}.slurm"
+  # RUNFILE="gf_run${ind}.sh"
+  RUNFILE="gf_run${ind}.slurm"
   
   #copy for individual runs
   cp run_gf_models.sh $RUNFILE
@@ -55,15 +57,15 @@ for ind in "${!BIOSITES_FILES[@]}"; do
   sed -i "s/INDEX_NUMBER/${ind}/" $RUNFILE
 
 	#submit sbatch job for each site file
-	./$RUNFILE
-	# sbatch $RUNFILE
+	# ./$RUNFILE
+	echo "submitting $RUNFILE"
+	echo " "
+	sbatch $RUNFILE
 
 	# echo " "
-	wait
+	# wait
 
 done
 
-mv output/* ../gf_run_outputs/
-mv out_* ../gf_run_outputs/
-
-echo "moved output files to gf_run_outputs"
+echo "jobs submitted"
+echo " "

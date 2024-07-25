@@ -349,42 +349,115 @@ bi.vars <- sapply(fish.traits, function(x) {
 bi.vars <- names(bi.vars[bi.vars == TRUE])
 
 fish.traits <- fish.traits %>%
-  mutate(across(c(order, family, temp_pref, col_pos, spawn_freq, matches(bi.vars)), as.factor))
+  #cohorts identified from: https://fishtreeoflife.org/taxonomy/
+  mutate(higher_lvl = case_when(
+    #cohort:
+    order %in% c("Cypriniformes", "Siluriformes", "Clupeiformes", "Characiformes") ~ "Otomorpha",
+    order %in% c("Perciformes", "Atheriniformes", "Centrarchiformes", "Cyprinodontiformes", 
+                 "Esociformes", "Percopsiformes", "Salmoniformes", "Scorpaeniformes") ~ "Euteleosteomorpha",
+    #class
+    order %in% c("Acipenseriformes") ~ "Chondrostei",
+    #jawless fish
+    order %in% c("Petromyzontiformes") ~ "Hyperoartia",
+    #infraclass:
+    order %in% c("Amiiformes", "Lepisosteiformes") ~ "Holostei",
+    order %in% c("Anguilliformes", "Osteoglossiformes") ~ "Teleostei (out)", #in same infraclass as above cohorts but diff cohort..
+    T ~ NA),
+    infraclass = case_when(higher_lvl %in% c("Otomorpha", "Euteleosteomorpha", "Teleostei (out)") ~ "Teleostei",
+                           order %in% c("Amiiformes", "Lepisosteiformes") ~ "Holostei",
+                           order %in% c("Acipenseriformes") ~ "Chondrostei",
+                           order %in% c("Petromyzontiformes") ~ "Hyperoartia",
+                           T ~ NA)) %>%
+  relocate(higher_lvl, infraclass)
 
-mutate(higher_lvl = case_when(#NEOPTERA (INFRACLASS)
-  order %in% c("Orthoptera", "Plecoptera", "Hemiptera") ~ "Polyneoptera/Paraneoptera",
-  ##HOLOMETABOLA (SUPERORDER)
-  order %in% c("Coleoptera", "Hymenoptera", "Megaloptera", "Neuroptera") ~ "Neuropteroidea +",
-  order %in% c("Diptera", "Lepidoptera", "Trichoptera") ~ "Mecoptera",
-  #PALAEOPTERA (INFRACLASS)
-  order %in% c("Ephemeroptera", "Odonata") ~ "Palaeoptera (infraclass)",
-  T ~ NA)) %>%
+#check num levels in groups
+# fish.traits %>% 
+#   group_by(higher_lvl) %>% 
+#   summarise(unique_fam = n_distinct(family), 
+#             unique_genus = n_distinct(genus), 
+#             unique_spp = n_distinct(species), 
+#             na_vals = sum(across(everything(), ~ sum(is.na(.)))))
 
-tmp <- as.data.frame(fish.traits[,-c(3,4)])
+#split out largest group to include genus in imputation (missimp can't handle greater than 53 levels)
+fish.split <- fish.traits %>%
+  select(-infraclass) %>%
+  filter(higher_lvl %in% c("Otomorpha", "Euteleosteomorpha"))
+fish.split <- split(fish.split, fish.split$higher_lvl)
+fish.split[[3]] <- fish.traits[, names(fish.traits) != "genus"]
 
-#if xtfrm error appears, need to restart R and try again
-fish.imp <- missForest(tmp, #including order+family, as taxonomic relationship vars for improved prediction
-                       ntree = 1000, #set to 1000 for full run
-                       variablewise = TRUE,
-                       verbose = TRUE) #return individual var performance or not
+fish.split <- lapply(fish.split, function(x) {
+  x %>%
+    select(-higher_lvl,) %>%
+    mutate(across(c(matches("infraclass"), order, family, matches("genus"), temp_pref, col_pos, spawn_freq, matches(bi.vars)), as.factor)) })
 
-imp.traits <- bind_cols(fish.traits[,c(3,4)], fish.imp$ximp)
-imp.traits <- imp.traits %>%
-  relocate(order, family, genus, species) %>%
-  mutate(across(where(is.numeric), ~ round(.x, digits = 4)))
+imputed.results <- lapply(fish.split, function(x) {
+  
+  tmp <- as.data.frame(x[, names(x) != "species"])
+  
+  #note: if xtfrm error appears, need to restart R and try again
+  imp <- missForest(tmp, #including order+family+genus/infraclass, as taxonomic relationship var for improved prediction
+                    ntree = 1000, #set to 1000 for full run
+                    variablewise = TRUE,
+                    verbose = TRUE) #return individual var performance or not
+  
+  imp.traits <- bind_cols(x[, names(x) %in% c("species")], imp$ximp)
+  
+  imp.tr.error <- data.frame(trait = names(imp$ximp), 
+                             error_type = names(imp$OOBerror), 
+                             error_val = imp$OOBerror)
+  
+  res <- list(traits = imp.traits, error = imp.tr.error)
+  
+  return(res)
+  
+})
 
-write_csv(imp.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish_imputed.csv"))
+#bind back together
+imp.traits <- data.frame()
+imp.tr.error <- data.frame()
+for(i in seq_along(imputed.results)) {
+  if(i == 3) {
+    imputed.results[[i]][["traits"]]$imp_type <- "full"
+    imputed.results[[i]][["error"]]$imp_type <- "full"
+  } else {
+    imputed.results[[i]][["traits"]]$imp_type <- "cohort"
+    imputed.results[[i]][["error"]]$imp_type <- "cohort"
+  }
+  
+  imp.traits <- bind_rows(imp.traits, imputed.results[[i]][["traits"]])
+  imp.tr.error <- bind_rows(imp.tr.error, imputed.results[[i]][["error"]])
+}
 
-imp.tr.error <- data.frame(trait = names(fish.imp$ximp), 
-                           error_type = names(fish.imp$OOBerror), 
-                           error_val = fish.imp$OOBerror)
+imp.traits <- imp.traits %>% relocate(imp_type, order, family, genus, species)
 
-imp.tr.error <- imp.tr.error %>%
+write_csv(imp.traits, paste0(PATH, "/20_Traits/trait_dat_summ_fish_imputed_raw.csv"))
+
+#select which imputation
+spp <- c(imputed.results[[1]][["traits"]]$species, imputed.results[[2]][["traits"]]$species)
+imp.traits.summ <- bind_rows(
+  imputed.results[[3]][["traits"]] %>% filter(!species %in% spp),
+  imputed.results[[2]][["traits"]],
+  imputed.results[[1]][["traits"]]
+)
+imp.traits.summ <- imp.traits.summ %>%
+  select(-c(infraclass, imp_type, genus)) %>%
+  left_join(., fish.traits[, names(fish.traits) %in% c("genus", "species")]) %>%
+  relocate(order, family, genus, species)
+
+write_csv(imp.traits.summ, paste0(PATH, "/20_Traits/trait_dat_summ_fish_imputed.csv"))
+
+#summarize error
+imp.tr.error.sum <- imp.tr.error %>%
   mutate(adj_error = case_when(error_type == "MSE" ~ sqrt(error_val), #RMSE
-                               error_type == "PFC" ~ 1 - error_val), #Proportion true classification
-         across(c(error_val, adj_error), ~ round(.x, digits = 3))) 
+                               error_type == "PFC" ~ 1 - error_val)) %>% #Proportion true classification
+  group_by(imp_type, trait) %>%
+  summarise(mn_error = mean(error_val, na.rm = TRUE),
+            mn_prop_true = mean(adj_error, na.rm = TRUE),
+            std_prop_true = sd(adj_error, na.rm = TRUE)) %>%
+  mutate(across(where(is.numeric), ~round(.x, 3)))
 
-write_csv(imp.tr.error, paste0(PATH, "/20_Traits/impute_trait_error_rates_fish.csv"))
+write_csv(imp.tr.error.sum, paste0(PATH, "/20_Traits/impute_trait_error_rates_fish_summ.csv"))
+write_csv(imp.tr.error, paste0(PATH, "/20_Traits/impute_trait_error_rates_fish_raw.csv"))
 
 #plot traits
 gg.traits <- fish.traits[,-c(1:4)] %>% 
@@ -614,16 +687,12 @@ PATH <- getwd()
 bug.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_bug.csv")) %>%
   rename(genus = Genus, family = Family, order = Order) %>%
   mutate(join_track = "joined")
-bug <- read_csv(paste0(PATH, "/01_BioDat/occ_bug_inthigh_long.csv"), col_types = cols(.default = "c")) %>%
-  select(order, family, subfamily, tribe, genus) %>%
-  filter(!(is.na(subfamily) & is.na(tribe) & is.na(genus))) %>%
-  mutate(taxa = case_when(tribe == "Aciliini" ~ tribe,
-                          tribe == "Hydrophilini" ~ tribe,
-                          tribe == "Pseudochironomini" ~ tribe,
-                          !is.na(genus) ~ genus,
-                          !is.na(tribe) ~ tribe,
-                          !is.na(subfamily) ~ subfamily)) %>%
-  distinct()
+
+bug <- read_csv(paste0(paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"))) %>%
+  filter(bio_type == "bug") %>% 
+  select(order, family, subfamily, tribe, genus, taxa_name) %>% 
+  distinct() %>%
+  rename(taxa = taxa_name)
 
 #attempt to join traits to species list
 #genus level first
@@ -677,7 +746,7 @@ dups <- compress_traits(data = dups, "taxa",
 dups <- left_join(tmp, dups)
 
 #add back in
-bug.traits <- bind_rows(bug.traits[!duplicated(bug.traits$taxa) & !duplicated(bug.traits$taxa, fromLast = TRUE),], dups) #should be 10 missing
+bug.traits <- bind_rows(bug.traits[!duplicated(bug.traits$taxa) & !duplicated(bug.traits$taxa, fromLast = TRUE),], dups) #should be 3 missing
 
 # #summarize amount of missing data
 # sapply(bug.traits, function(x) round(sum(is.na(x)) / length(x) * 100, digits = 2))
@@ -742,7 +811,8 @@ imp.tr.error.sum <- imp.tr.error %>%
                                error_type == "PFC" ~ 1 - error_val)) %>% #Proportion true classification
   group_by(trait) %>%
   summarise(mn_error = mean(error_val, na.rm = TRUE),
-            mn_prop_true = mean(adj_error, na.rm = TRUE))
+            mn_prop_true = mean(adj_error, na.rm = TRUE),
+            std_prop_true = sd(adj_error, na.rm = TRUE))
 
 write_csv(imp.tr.error.sum, paste0(PATH, "/20_Traits/impute_trait_error_rates_bug_summ.csv"))
 write_csv(imp.tr.error, paste0(PATH, "/20_Traits/impute_trait_error_rates_bug_raw.csv"))
@@ -795,32 +865,48 @@ occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          long = col_number(),
                                                          site_id = col_character(),
                                                          COMID = col_character(),
-                                                         gage_no_15yr = col_character(),
-                                                         dist2gage_m_15yr = col_number(),
-                                                         dist2strm_m_flw = col_number()))
+                                                         flw_gage_no = col_character()))
 # occ.list <- list(occ.list[[2]]) #for now, without imputed bug data
 
-#wide traits load in
-file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "trait_dat_summ_(fish|bug)_imputed", full.names = TRUE)
+#long traits load in
+file.list <- list.files(paste0(PATH, "/20_Traits/"), pattern = "trait_dat_summ_(fish|bug)_imputed\\.", full.names = TRUE)
 traits <- lapply(file.list, read_csv)
 
 ## trait clustering ----
 library(cluster); library(vegan)
 
 #this can be used to identify the possible levels within a trait dataset
-# lvls <- lapply(t_mod, function(x) {
-#   lapply(select(x, where(is.character)), unique) #check potential cat levels
-# })
-#for ordinal variables
+# lapply(select(traits[[1]], where(is.character)), unique) #check potential cat levels
+
 ##FISH
+#set order of ordinal variables
 oc <- list(
   spawn_freq = c("single", "multiple"), 
   temp_pref = c("cold", "cold/cool", "cool", "cool/warm", "warm") 
   # col_pos = c("Benthic", "Non-benthic") #not ordered
 )
-##BUG
 
-group_res_list <- comp_trait_groups(trait_dat =  traits[[1]][,-c(1:3)], ord_col = oc, max_k = 100)
+group_res_list <- comp_trait_groups(trait_dat =  traits[[2]][, !names(traits[[2]]) %in% c("order", "genus", "family")], ord_col = oc, max_k = 100)
+
+##BUG
+#set ordinal variable order
+##commented out are categorical vars not input as ordinal
+##must put in appropriate order below
+oc <- list(
+  max_size = c("small", "med", "large"),
+  repro_disp = c("low", "high"),
+  # disp_strength = c("weak", "strong"),
+  # gen_num = c("univolt", "multivolt", "semivolt"),
+  therm_pref = c("cold", "cold-cool", "cool-warm", "warm", "hot"),
+  # synch = c("well", "poorly"),
+  # resp_type = c("gills", "tegument", "plast_spir"),
+  # rheo_type = c("depo_eros", "eros", "depo"),
+  swim_abil = c("none", "weak", "strong"),
+  # desic_tol= c("absent", "present"),
+  life_span = c("vshort", "short", "long")
+)
+
+group_res_list <- comp_trait_groups(trait_dat =  traits[[1]][, !names(traits[[1]]) %in% c("order", "genus", "family", "subfamily", "tribe")], tax_col_name = "taxa", ord_col = oc, max_k = 100)
 
 ###plots to look at groups ----
 #dendrogram
@@ -829,8 +915,8 @@ pltree(group_res_list$hierarchical_cluster_results, cex = 0.6, labels = FALSE)
 
 dend <- group_res_list$hierarchical_cluster_results %>% as.dendrogram %>% hang.dendrogram
 par(mar = c(15,2,1,1))
-dend %>% color_branches(k=10) %>% color_labels(k=15) %>% plot
-dend %>% rect.dendrogram(k=10)
+dend %>% color_branches(k=16) %>% color_labels(k=16) %>% plot
+dend %>% rect.dendrogram(k=16)
 
 #compare silhouette, r2
 clust.df <- group_res_list[["group_comp_results"]]
@@ -840,22 +926,25 @@ plot(clust.df$k, clust.df$grp_r2, type = "b", pch = 19)
 
 ggplot() +
   geom_point(data = clust.df, aes(x = mn_sil_w, y = grp_r2, fill = k), shape = 21, size = 3) +
+  geom_point(data = clust.df[clust.df$k == 16, ], aes(x = mn_sil_w, y = grp_r2), shape = 1, size = 3, color = "red") +
   scale_fill_viridis_c() +
   theme_minimal()
 
 #pcoa vizualize
-plot_clusters(trait_group_output = group_res_list, num_clust = 20, return_pc = c(1,2),
+plot_clusters(trait_group_output = group_res_list, num_clust = 16, return_pc = c(1,2),
               ellipse = TRUE, vectors = TRUE, trait_dat = traits[[1]][,-c(1:3)], ord_col = oc)
 
-table(cutree(group_res_list[["hierarchical_cluster_results"]], k = 20))
+table(cutree(group_res_list[["hierarchical_cluster_results"]], k = 23))
 
 #assign groups and make site_x_trait matrix
-clust <- cutree(group_res_list$hierarchical_cluster_results, k = 20)
+##on 2024JUL23, used 20 clusters for fish, 16 clusters for bugs
+clust <- cutree(group_res_list$hierarchical_cluster_results, k = 16)
 clust <- as.data.frame(clust) %>% rownames_to_column("species") %>% mutate(clust = paste0("clust", clust))
 
 clust.wide <- site_x_trait(occ.list[[1]], clust)
-write_csv(clust.wide[[1]], paste0(PATH, "/20_Traits/site_x_trait_fish_presence-absence_clust.csv"))
-write_csv(clust.wide[[2]], paste0(PATH, "/20_Traits/site_x_trait_fish_abundance_clust.csv"))
+write_csv(clust.wide[[1]], paste0(PATH, "/20_Traits/site_x_trait_bug_presence-absence_clust.csv"))
+write_csv(clust.wide[[2]], paste0(PATH, "/20_Traits/site_x_trait_bug_abundance_clust.csv"))
+
 
 ## site by trait matrices ----
 #FISH
@@ -884,135 +973,135 @@ bug <- site_x_trait(occ.list[[1]], traits[[1]][,-c(1:5)], convert_cont_to_cat = 
 write_csv(bug[[1]], paste0(PATH, "/20_Traits/site_x_trait_bug_presence-absence_cont2mn.csv"))
 write_csv(bug[[2]], paste0(PATH, "/20_Traits/site_x_trait_bug_abundance_cont2mn.csv"))
 
-# summarize + plot ----
-library(vegan); library(ape)
-fish.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
-
-##pcoa ----
-#prep dataframe
-tmp <- fish.sum %>% 
-  select(-c(genus, spp_ep)) %>% 
-  mutate(species = sub(" ", "_", species)) %>% 
-  column_to_rownames("species") %>%
-  mutate(across(matches(paste(t.cols[t.cols$trait_type == "binary" & t.cols$database_source == "FishTraits", ]$trait_name, collapse = "|")),
-                as.factor),
-         repro_type = as.factor(repro_type)) 
-#scale and center numeric data
-tmp <- cbind(apply(tmp %>% select(where(is.numeric)), 2, scale, center = TRUE, scale = TRUE),
-             tmp %>% select(-where(is.numeric)))
-
-#gower distance
-dist <- cluster::daisy(tmp, metric = "gower", stand = TRUE)
-
-pcoa <- pcoa(dist, correction = "lingoes", rn = rownames(tmp))
-# pcoa <- cmdscale(dist, eig = T, k = 10)
-
-#check
-# ordiplot(pcoa, display = 'sites', type = 'text')
-
-fi_pcoa <- as.data.frame(pcoa$vectors[,1:3]) %>% 
-  rownames_to_column("species") %>% 
-  rename(PC1 = Axis.1, PC2 = Axis.2, PC3 = Axis.3) %>%
-  mutate(species = sub("_", " ", species)) %>%
-  left_join(., f.spp) %>%
-  relocate(order, family, genus, species) %>%
-  group_by(family) %>%
-  mutate(fam_n = n()) %>%
-  left_join(., tmp %>% rownames_to_column("species") %>% mutate(species = sub("_", " ", species))) %>%
-  mutate(repro_type = case_when(grepl("g_ns", repro_type) ~ "guarder, nest spawner",
-                                grepl("indiff", repro_type) ~ "bearer, substrate indifferent",
-                                grepl("g_sc", repro_type) ~ "guarder, substrate chooser",
-                                grepl("ng_bh", repro_type) ~ "nonguarder, brood hider",
-                                grepl("ng_os", repro_type) ~ "nonguarder, open substrate",
-                                TRUE ~ NA))
-
-#get trait arrows
-vec.tr <- envfit(pcoa$vectors, tmp, perm = 1000, na.rm = TRUE)
-# vec.tr <- envfit(scores(pcoa), tmp, perm=1000, na.rm = TRUE) cmdscale method
-
-t.scrs <- bind_rows(as.data.frame(scores(vec.tr, display = "vectors")),
-                    as.data.frame(scores(vec.tr, display = "factors"))) %>%
-  rownames_to_column("trait") %>%
-  rename(PC1 = Axis.1, PC2 = Axis.2) %>%
-  mutate(cat = case_when(grepl("0", trait) ~ "0",
-                         grepl("1", trait) ~ "1",
-                         grepl("g_ns", trait) ~ "guarder, nest spawner",
-                         grepl("indiff", trait) ~ "bearer, substrate indifferent",
-                         grepl("g_sc", trait) ~ "guarder, substrate chooser",
-                         grepl("ng_bh", trait) ~ "nonguarder, brood hider",
-                         grepl("ng_os", trait) ~ "nonguarder, open substrate",
-                         TRUE ~ NA),
-         trait_name = gsub("0|1|g_ns|g_sc|indiff|ng_bh|ng_os", "", trait))
-
-#get centroid
-centroid <- at_pcoa %>% select(PC1, PC2) %>% mutate(across(everything(), mean)) %>% distinct()
-
-#plot
-ggplot() +
-  geom_point(data = fi_pcoa, aes(x = PC1, y = PC2, fill = repro_type), size = 3, shape = 21, alpha = 0.7) +
-  #family color plot
-  # geom_point(data = fi_pcoa %>% filter(fam_n < 15), aes(x = PC1, y = PC2), fill = "gray", size = 1.5, shape = 21, alpha = 0.5) +
-  # geom_point(data = fi_pcoa %>% filter(fam_n > 15), aes(x = PC1, y = PC2, fill = family), size = 2, shape = 21, alpha = 0.8) +
-  #continuous vectors
-  geom_segment(data = t.scrs %>% filter(is.na(cat)),
-               aes(x = 0, xend = PC1*2, y = 0, yend = PC2*2),
-               arrow = arrow(length = unit(0.25, "cm")), colour = "black", linewidth = 0.5) +
-  geom_text(data = t.scrs %>% filter(is.na(cat)), 
-            aes(x = PC1*2, y = PC2*2, label = trait), size = 4, angle = 0, nudge_y = -0.005, nudge_x = -0.04) +
-  #cat vectors
-  geom_point(data = t.scrs %>% filter(trait_name == "repro_type"), 
-             aes(x = PC1, y = PC2, fill = cat), size = 4, shape = 24) +
-  scale_fill_viridis_d(direction = -1, name = "", na.translate = F) +
-  theme_bw() 
-  # theme(legend.position = "bottom") +
-  # guides(fill = guide_legend(nrow = 2))
-ggsave(paste0(PATH, "/99_figures/fish_pcoa.png"), width = 8, height = 5)
-
-# pcoa$values$Corr_eig/sum(pcoa$values$Corr_eig)*100
-
-
-fish <- read_csv(paste0(PATH, "/20_Traits/comb_traits_long_fish.csv"))
-f.spp <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_all_long_20231128.csv")) %>% select(order, family, genus, species) %>% #fish list
-  distinct()
-
-fish.w <- fish %>% 
-  select(-db_orig) %>%
-  pivot_wider(names_from = trait, values_from = tra_val, values_fill = NA, values_fn = median)
-
-#which spp with no data?
-f.spp %>% filter(!is.na(species)) %>%
-  filter(!species %in% fish.w$species) %>% View
-
-#find traits x NA percent
-na.summ <- as.data.frame(colSums(is.na(fish.w)) / nrow(f.spp) * 100)
-names(na.summ) <- "perc_missing"
-na.summ <- na.summ %>%
-  rownames_to_column("trait") %>%
-  filter(!trait %in% c("genus", "species", "spp_ep"))
-na.summ <- bind_rows(na.summ %>% slice_max(perc_missing, n = 10), 
-                     na.summ %>% slice_min(perc_missing, n = 10))
-##plot
-ggplot() +
-  geom_col(data = na.summ, aes(x = perc_missing, y = reorder(trait, perc_missing))) +
-  theme_bw() +
-  scale_x_continuous(expand = c(0,0), limits = c(0, 100)) +
-  ylab("")
-ggsave(paste0(PATH, "/99_figures/traits_pct_missing_4trait.png"), height = 5, width = 5)
-
-#find fish x NA percent
-fish.na <- fish.w %>%
-  pivot_longer(cols = -c(genus, spp_ep, species), names_to = "trait", values_to = "tra_val") %>%
-  group_by(species) %>%
-  summarise(perc_missing = sum(is.na(tra_val)) / n() * 100)
-fish.na <- bind_rows(fish.na %>% slice_max(perc_missing, n = 10), 
-                     fish.na %>% slice_min(perc_missing, n = 10))
-##plot
-ggplot() +
-  geom_col(data = fish.na, aes(x = perc_missing, y = reorder(species, perc_missing))) +
-  theme_bw() +
-  scale_x_continuous(expand = c(0,0), limits = c(0, 100)) +
-  ylab("")
-ggsave(paste0(PATH, "/99_figures/traits_pct_missing_4fish.png"), height = 5, width = 5)
-
-
-
+# # summarize + plot ----
+# library(vegan); library(ape)
+# fish.sum <- read_csv(paste0(PATH, "/20_Traits/trait_dat_summ_fish.csv"))
+# 
+# ##pcoa ----
+# #prep dataframe
+# tmp <- fish.sum %>% 
+#   select(-c(genus, spp_ep)) %>% 
+#   mutate(species = sub(" ", "_", species)) %>% 
+#   column_to_rownames("species") %>%
+#   mutate(across(matches(paste(t.cols[t.cols$trait_type == "binary" & t.cols$database_source == "FishTraits", ]$trait_name, collapse = "|")),
+#                 as.factor),
+#          repro_type = as.factor(repro_type)) 
+# #scale and center numeric data
+# tmp <- cbind(apply(tmp %>% select(where(is.numeric)), 2, scale, center = TRUE, scale = TRUE),
+#              tmp %>% select(-where(is.numeric)))
+# 
+# #gower distance
+# dist <- cluster::daisy(tmp, metric = "gower", stand = TRUE)
+# 
+# pcoa <- pcoa(dist, correction = "lingoes", rn = rownames(tmp))
+# # pcoa <- cmdscale(dist, eig = T, k = 10)
+# 
+# #check
+# # ordiplot(pcoa, display = 'sites', type = 'text')
+# 
+# fi_pcoa <- as.data.frame(pcoa$vectors[,1:3]) %>% 
+#   rownames_to_column("species") %>% 
+#   rename(PC1 = Axis.1, PC2 = Axis.2, PC3 = Axis.3) %>%
+#   mutate(species = sub("_", " ", species)) %>%
+#   left_join(., f.spp) %>%
+#   relocate(order, family, genus, species) %>%
+#   group_by(family) %>%
+#   mutate(fam_n = n()) %>%
+#   left_join(., tmp %>% rownames_to_column("species") %>% mutate(species = sub("_", " ", species))) %>%
+#   mutate(repro_type = case_when(grepl("g_ns", repro_type) ~ "guarder, nest spawner",
+#                                 grepl("indiff", repro_type) ~ "bearer, substrate indifferent",
+#                                 grepl("g_sc", repro_type) ~ "guarder, substrate chooser",
+#                                 grepl("ng_bh", repro_type) ~ "nonguarder, brood hider",
+#                                 grepl("ng_os", repro_type) ~ "nonguarder, open substrate",
+#                                 TRUE ~ NA))
+# 
+# #get trait arrows
+# vec.tr <- envfit(pcoa$vectors, tmp, perm = 1000, na.rm = TRUE)
+# # vec.tr <- envfit(scores(pcoa), tmp, perm=1000, na.rm = TRUE) cmdscale method
+# 
+# t.scrs <- bind_rows(as.data.frame(scores(vec.tr, display = "vectors")),
+#                     as.data.frame(scores(vec.tr, display = "factors"))) %>%
+#   rownames_to_column("trait") %>%
+#   rename(PC1 = Axis.1, PC2 = Axis.2) %>%
+#   mutate(cat = case_when(grepl("0", trait) ~ "0",
+#                          grepl("1", trait) ~ "1",
+#                          grepl("g_ns", trait) ~ "guarder, nest spawner",
+#                          grepl("indiff", trait) ~ "bearer, substrate indifferent",
+#                          grepl("g_sc", trait) ~ "guarder, substrate chooser",
+#                          grepl("ng_bh", trait) ~ "nonguarder, brood hider",
+#                          grepl("ng_os", trait) ~ "nonguarder, open substrate",
+#                          TRUE ~ NA),
+#          trait_name = gsub("0|1|g_ns|g_sc|indiff|ng_bh|ng_os", "", trait))
+# 
+# #get centroid
+# centroid <- at_pcoa %>% select(PC1, PC2) %>% mutate(across(everything(), mean)) %>% distinct()
+# 
+# #plot
+# ggplot() +
+#   geom_point(data = fi_pcoa, aes(x = PC1, y = PC2, fill = repro_type), size = 3, shape = 21, alpha = 0.7) +
+#   #family color plot
+#   # geom_point(data = fi_pcoa %>% filter(fam_n < 15), aes(x = PC1, y = PC2), fill = "gray", size = 1.5, shape = 21, alpha = 0.5) +
+#   # geom_point(data = fi_pcoa %>% filter(fam_n > 15), aes(x = PC1, y = PC2, fill = family), size = 2, shape = 21, alpha = 0.8) +
+#   #continuous vectors
+#   geom_segment(data = t.scrs %>% filter(is.na(cat)),
+#                aes(x = 0, xend = PC1*2, y = 0, yend = PC2*2),
+#                arrow = arrow(length = unit(0.25, "cm")), colour = "black", linewidth = 0.5) +
+#   geom_text(data = t.scrs %>% filter(is.na(cat)), 
+#             aes(x = PC1*2, y = PC2*2, label = trait), size = 4, angle = 0, nudge_y = -0.005, nudge_x = -0.04) +
+#   #cat vectors
+#   geom_point(data = t.scrs %>% filter(trait_name == "repro_type"), 
+#              aes(x = PC1, y = PC2, fill = cat), size = 4, shape = 24) +
+#   scale_fill_viridis_d(direction = -1, name = "", na.translate = F) +
+#   theme_bw() 
+#   # theme(legend.position = "bottom") +
+#   # guides(fill = guide_legend(nrow = 2))
+# ggsave(paste0(PATH, "/99_figures/fish_pcoa.png"), width = 8, height = 5)
+# 
+# # pcoa$values$Corr_eig/sum(pcoa$values$Corr_eig)*100
+# 
+# 
+# fish <- read_csv(paste0(PATH, "/20_Traits/comb_traits_long_fish.csv"))
+# f.spp <- read_csv(paste0(PATH, "/01_BioDat/occ_fish_all_long_20231128.csv")) %>% select(order, family, genus, species) %>% #fish list
+#   distinct()
+# 
+# fish.w <- fish %>% 
+#   select(-db_orig) %>%
+#   pivot_wider(names_from = trait, values_from = tra_val, values_fill = NA, values_fn = median)
+# 
+# #which spp with no data?
+# f.spp %>% filter(!is.na(species)) %>%
+#   filter(!species %in% fish.w$species) %>% View
+# 
+# #find traits x NA percent
+# na.summ <- as.data.frame(colSums(is.na(fish.w)) / nrow(f.spp) * 100)
+# names(na.summ) <- "perc_missing"
+# na.summ <- na.summ %>%
+#   rownames_to_column("trait") %>%
+#   filter(!trait %in% c("genus", "species", "spp_ep"))
+# na.summ <- bind_rows(na.summ %>% slice_max(perc_missing, n = 10), 
+#                      na.summ %>% slice_min(perc_missing, n = 10))
+# ##plot
+# ggplot() +
+#   geom_col(data = na.summ, aes(x = perc_missing, y = reorder(trait, perc_missing))) +
+#   theme_bw() +
+#   scale_x_continuous(expand = c(0,0), limits = c(0, 100)) +
+#   ylab("")
+# ggsave(paste0(PATH, "/99_figures/traits_pct_missing_4trait.png"), height = 5, width = 5)
+# 
+# #find fish x NA percent
+# fish.na <- fish.w %>%
+#   pivot_longer(cols = -c(genus, spp_ep, species), names_to = "trait", values_to = "tra_val") %>%
+#   group_by(species) %>%
+#   summarise(perc_missing = sum(is.na(tra_val)) / n() * 100)
+# fish.na <- bind_rows(fish.na %>% slice_max(perc_missing, n = 10), 
+#                      fish.na %>% slice_min(perc_missing, n = 10))
+# ##plot
+# ggplot() +
+#   geom_col(data = fish.na, aes(x = perc_missing, y = reorder(species, perc_missing))) +
+#   theme_bw() +
+#   scale_x_continuous(expand = c(0,0), limits = c(0, 100)) +
+#   ylab("")
+# ggsave(paste0(PATH, "/99_figures/traits_pct_missing_4fish.png"), height = 5, width = 5)
+# 
+# 
+# 
