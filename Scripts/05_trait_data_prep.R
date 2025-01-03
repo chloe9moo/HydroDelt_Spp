@@ -861,6 +861,7 @@ source(paste0(PATH, "/Scripts/XX_trait_functions.R"))
 
 #sites
 file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
+file.list <- file.list[grepl("20240813", file.list)]
 occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          long = col_number(),
                                                          site_id = col_character(),

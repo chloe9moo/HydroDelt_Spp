@@ -28,8 +28,8 @@ get_var_threshold <- function(gf_model, pred_var) {
     d
   }
   
-  integrate.density <- function(d) {
-    integrate(approxfun(d,rule=2),lower=min(d$x),upper=max(d$x))$value
+  integrate.density <- function(d) { #modified relative tolerance to handle roundoff errors
+    integrate(approxfun(d,rule=2),lower=min(d$x),upper=max(d$x), rel.tol = .Machine$double.eps^.05)$value
   }
   
   scale.density <- function(d,scale=1/mean(d$y)) {

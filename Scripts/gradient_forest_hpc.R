@@ -4,8 +4,8 @@
 
 suppressPackageStartupMessages({
   library(tidyverse)
-  # library(gradientForest) ##local
-  library(gradientForest, lib.loc = "/scrfs/storage/voorhees/home/R/x86_64-pc-linux-gnu/4.2")
+  library(gradientForest) ##local
+  # library(gradientForest, lib.loc = "/scrfs/storage/voorhees/home/R/x86_64-pc-linux-gnu/4.2")
 })
 
 options(readr.show_col_types = FALSE)
@@ -13,7 +13,7 @@ options(readr.show_col_types = FALSE)
 #sessionInfo()
 
 PATH <- getwd()
-# PATH <- paste0(getwd(), "/working_dir") #for testing
+# PATH <- paste0(getwd(), "/working_dir") #for testing, manual runs
 message(paste0("\n\nworking directory: ", PATH, "\n\n"))
 
 #read + prep data ----
@@ -176,7 +176,7 @@ if(grepl("bug", bio.file, ignore.case = TRUE)) {
 }
 
 #set taxonomic or trait dataset being run
-if(grepl("trait", bio.file, ignore.case = TRUE)) {
+if(grepl("_trait_", bio.file, ignore.case = TRUE)) {
   set.bio.type <- "trait"
   
   #set trait file naming option
@@ -184,13 +184,19 @@ if(grepl("trait", bio.file, ignore.case = TRUE)) {
   if(grepl("cont2mn", bio.file)) { bio.name <- "cont2mn" }
   if(grepl("clust", bio.file)) { bio.name <- "clust" }
   
-} else {
+}
+if(grepl("_wide_", bio.file, ignore.case = TRUE)) {
   set.bio.type <- "taxonomic"
   bio.name <- "pa"
 }
+if(grepl("div", bio.file, ignore.case = TRUE)) {
+  set.bio.type <- "div"
+  if(grepl("rich", bio.file)) { bio.name <- "rich" }
+  if(grepl("fdisp", bio.file)) { bio.name <- "fdisp" }
+}
 
 #regression if abundance, else classification
-if(grepl("abundance", bio.file, ignore.case = TRUE)) {
+if(grepl("abundance|div", bio.file, ignore.case = TRUE)) {
   set.gf.class <- FALSE
 } else {
   set.gf.class <- TRUE

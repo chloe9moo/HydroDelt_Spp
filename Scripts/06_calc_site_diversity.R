@@ -5,7 +5,7 @@ options(readr.show_col_types = FALSE)
 
 PATH <- getwd()
 
-file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
+file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_20240813", full.names = TRUE)
 occ.list <- lapply(file.list, read_csv, col_types = cols(COMID = col_character(),
                                                          site_id = col_character(),
                                                          flw_type = col_character(),
@@ -137,3 +137,20 @@ div_sum <- div_list %>%
                    .names = "{.col}_{.fn}"))
 write_csv(div_sum, paste0(PATH, "/98_result_tables/site_div_alltax_alldiv_summ.csv"))
 
+#make site diversity for gradient forest input ----
+div_sum <- read_csv(paste0(PATH, "/98_result_tables/site_div_alltax_alldiv_raw.csv"))
+
+div.sites <- vector("list", 4)
+for(i in seq_along(occ.list)) {
+  div.sites[[i]] <- occ.list[[i]] %>%
+    select(COMID, site_id, long, lat, flw_type, flw_gage_no) %>%
+    left_join(div_sum[, names(div_sum) %in% c("site_id", "n_sp")])
+  div.sites[[i+2]] <- occ.list[[i]] %>%
+    select(COMID, site_id, long, lat, flw_type, flw_gage_no) %>%
+    left_join(div_sum[, names(div_sum) %in% c("site_id", "f_disp")])
+}
+
+write_csv(div.sites[[1]], paste0(PATH, "/20_Traits/site_x_div_bug_rich.csv"))
+write_csv(div.sites[[2]], paste0(PATH, "/20_Traits/site_x_div_fish_rich.csv"))
+write_csv(div.sites[[3]], paste0(PATH, "/20_Traits/site_x_div_bug_fdisp.csv"))
+write_csv(div.sites[[4]], paste0(PATH, "/20_Traits/site_x_div_fish_fdisp.csv"))

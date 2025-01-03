@@ -7,20 +7,26 @@
 BIOSITES_FILES=(
   #traits
   # "20_Traits/site_x_trait_fish_abundance_cont2mn.csv"
-  # "20_Traits/site_x_trait_fish_abundance_cont2cat.csv"
+  "20_Traits/site_x_trait_fish_abundance_cont2cat.csv"
   # "20_Traits/site_x_trait_fish_abundance_clust.csv"
   # "20_Traits/site_x_trait_bug_abundance_cont2mn.csv"
-  # "20_Traits/site_x_trait_bug_abundance_cont2cat.csv"
+  "20_Traits/site_x_trait_bug_abundance_cont2cat.csv"
   # "20_Traits/site_x_trait_bug_abundance_clust.csv"
   #taxonomic
-  "01_BioDat/occ_fish_filtered_wide_20240718.csv"
-  "01_BioDat/occ_bug_filtered_wide_20240718.csv"
+  "01_BioDat/occ_fish_filtered_wide_20240813.csv"
+  "01_BioDat/occ_bug_filtered_wide_20240813.csv"
+  #diversity
+  # "20_Traits/site_x_div_bug_rich.csv"
+  # "20_Traits/site_x_div_bug_fdisp.csv"
+  # "20_Traits/site_x_div_fish_rich.csv"
+  # "20_Traits/site_x_div_fish_fdisp.csv"
   )
 #changing these here so that the sbatch shell script doesn't need to be edited directly
-# ENVVARS='"include_baseline" "include_alt" "include_hydro_fm24" "include_lulc' #columns from environmental_variable_info.csv
-# FLOWTYPES='"Int" "RO" "GW"'
-ENVVARS="include_lulc"
-FLOWTYPES="Int"
+# ENVVARS='"include_baseline" "include_alt" "include_hydro_fm24" "include_lulc"' #columns from environmental_variable_info.csv
+ENVVARS='"include_baseline" "include_hydro_fm24"'
+FLOWTYPES='"Int" "RO" "GW"'
+# ENVVARS="include_lulc"
+# FLOWTYPES="Int"
 
 #make working directory & output spots
 mkdir ../gf_run_outputs
@@ -57,13 +63,13 @@ for ind in "${!BIOSITES_FILES[@]}"; do
   sed -i "s/INDEX_NUMBER/${ind}/" $RUNFILE
 
 	#submit sbatch job for each site file
-	# ./$RUNFILE
+	./$RUNFILE
 	echo "submitting $RUNFILE"
 	echo " "
-	sbatch $RUNFILE
+	# sbatch $RUNFILE
 
 	# echo " "
-	# wait
+	wait
 
 done
 

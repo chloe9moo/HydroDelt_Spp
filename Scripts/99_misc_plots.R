@@ -130,13 +130,11 @@ library(tidyverse); library(sf)
 PATH <- getwd()
 source(paste0(PATH, "/Scripts/XX_colors.R"))
 
-file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_", full.names = TRUE)
+file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_20240718", full.names = TRUE)
 occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          long = col_number(),
                                                          COMID = col_character(),
-                                                         gage_no_15yr = col_character(),
-                                                         dist2gage_m_15yr = col_number(),
-                                                         dist2strm_m_flw = col_number()))
+                                                         flw_gage_no = col_character()))
 # occ.list <- list(occ.list[[2]])
 
 div_list <- read_csv(paste0(PATH, "/98_result_tables/site_div_alltax_alldiv_raw.csv"))
@@ -188,17 +186,23 @@ ggplot(data = tmp) +
   geom_density(aes(value, fill = div_type)) +
   facet_wrap(~ div_type, scales = "free") 
 
-ggplot(data = filter(div, n_sp > 1), aes(x = n_sp, y = f_disp, color = flw_type)) +
+ggplot(data = filter(div, n_sp > 1 & taxa == "fish"), aes(x = n_sp, y = f_disp, color = flw_type)) +
   geom_point(aes(shape = flw_type), size = 3, alpha = 0.1) +
   geom_smooth(method = "glm", linewidth = 1.5) +
-  facet_wrap(~ taxa, scales = "free_x") +
-  scale_color_manual(values = flow.pal) +
-  coord_cartesian(ylim = c(0, 0.26)) +
+  # geom_smooth(method = "gam", linewidth = 1.5, show.legend = FALSE) +
+  # facet_wrap(~ taxa, scales = "free_x") +
+  scale_color_manual(values = flow.pal, name = "Flow Regime") +
+  scale_shape_manual(values = c(16, 17, 18), name = "Flow Regime") +
+  # coord_cartesian(ylim = c(0, 0.26)) +
   xlab("number of species per site") + ylab("functional dispersion") +
   theme_bw() +
   guides(color = guide_legend(override.aes = list(fill = NA, size = 3, alpha = 1)))
 
-ggsave(paste0(PATH, "/99_figures/site_div_alltax_rich-v-disp_comp.png"), width = 8, height = 5)
+ggsave(paste0(PATH, "/99_figures/site_div_fish_rich-v-disp_comp.png"), width = 8, height = 5)
+
+tmp2 <- div[div$taxa == "fish" & div$flw_type == "GW", ]
+  
+cor.test(tmp2$n_sp, tmp2$f_disp)
 
 ##map of site diversity ----
 #nhd load in
@@ -232,6 +236,7 @@ ggpubr::ggarrange(p1, p2, nrow = 1)
 ggsave(paste0(PATH, "/99_figures/site_div_fish_map_comparison.png"), width = 10, height = 5)
 
 #site diversity relationship ----
+eco.reg <- st_read(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp"))
 div.sf <- st_as_sf(div %>% filter(taxa == "fish"), coords = c("long", "lat"), crs = 4269) 
 
 #break down relationship into cats
@@ -247,29 +252,63 @@ div.sf <- div.sf %>%
 #make legend
 l <- ggplot() +
   geom_tile(data = div.sf, aes(n_sp, f_disp, fill = rich_fdisp)) +
-  scale_fill_viridis_d(option = "viridis") +
-  scale_x_discrete(expand = c(0,0), name = "richness") +
-  scale_y_discrete(expand = c(0,0), name = "functional diversity") +
+  # scale_fill_viridis_d(option = "viridis") +
+  scale_fill_manual(values = bi.var.pal) +
+  scale_x_discrete(expand = c(0,0), name = "richness", labels = c("low", "", "", "high")) +
+  scale_y_discrete(expand = c(0,0), name = "functional diversity", labels = c("low", "", "", "high")) +
+  coord_fixed() +
   theme_classic() +
   theme(legend.position = "none",
-        axis.title = element_text(size = 18),
-        axis.text = element_text(size = 20),
-        axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1))
-l
+        axis.title = element_text(size = 30),
+        axis.text = element_text(size = 25, color = "black")
+        )
+# l
+# ggsave(paste0(PATH, "/99_figures/site_div_bug_interaction_legend.png"), plot = l, width = 5, height = 5)
 
 #plot
 p1 <- ggplot() +
-  geom_sf(data = hlnd, fill = "grey", color = "black", linewidth = 0.6) +
-  geom_sf(data = div.sf, aes(color = rich_fdisp), shape = 19, size = 5, alpha = 0.8) +
-  scale_color_viridis_d() +
+  geom_sf(data = hlnd, fill = "#F5F5F5", color = NA, linewidth = 0.6) +
+  geom_sf(data = eco.reg, fill = NA, color = "darkgrey", linewidth = 0.6) +
+  geom_sf(data = hlnd, fill = NA, color = "#3B3B3B", linewidth = 0.6) +
+  geom_sf(data = div.sf, aes(fill = rich_fdisp, shape = flw_type), size = 5, alpha = 0.8) +
+  scale_shape_manual(values = c(21, 22, 24), name = "Flow Regime") +
+  # scale_color_viridis_d() +
+  scale_fill_manual(values = bi.var.pal) +
+  guides(fill = "none", shape = guide_legend(override.aes = list(fill = "black"))) +
   coord_sf(xlim = c(-98, -89)) +
+  ggtitle("Fish") +
   theme(axis.line = element_line(color = "black"),
         panel.grid = element_blank(),
         plot.background = element_blank(),
         panel.background = element_blank(),
-        axis.text = element_text(size = 20),
-        legend.position = "none")
+        axis.text = element_text(size = 15),
+        legend.position = "right",
+        legend.key = element_blank(),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20),
+        plot.title = element_text(size = 20))
 p1
 
-# ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_legend.png"), plot = l, width = 5, height = 4)
-ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_map.png"), plot = p1, width = 10, height = 9)
+ggsave(paste0(PATH, "/99_figures/site_div_fish_interaction_map.png"), plot = p1, width = 10, height = 9, bg = "white")
+
+##map inset
+usa <- st_as_sf(maps::map("usa", fill = T, plot = F)) %>% #EPSG 4269 = NAD83
+  st_transform(., crs = 4269)
+p2 <- ggplot() +
+  geom_sf(data = usa, color = "black", fill = "lightgrey") +
+  geom_sf(data = hlnd, fill = "grey", color = "#3B3B3B", linewidth = 0.5) +
+  geom_sf(data = eco.reg, aes(fill = US_L3NAME), color = "black", linewidth = 0.1, alpha = 0.8) +
+  scale_fill_viridis_d(option = "mako", name = "Level 3\nEcoregion Name") +
+  coord_sf(xlim = c(-105, -70)) +
+  theme(axis.line = element_blank(),
+        panel.grid = element_blank(),
+        plot.background = element_blank(),
+        panel.background = element_blank(),
+        axis.text = element_blank(),
+        legend.position = "right",
+        legend.key = element_blank(),
+        legend.text = element_text(size = 11),
+        legend.title = element_text(size = 11),
+        axis.ticks = element_blank())
+# p2
+ggsave(paste0(PATH, "/99_figures/site_div_interaction_inset.png"), plot = p2, width = 5, height = 4, bg = "white")

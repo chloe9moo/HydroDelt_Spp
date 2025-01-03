@@ -512,10 +512,10 @@ final.dat <- final.dat %>%
 
 ##save final dataset (long format)
 write_csv(final.dat, paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_", gsub("-", "", Sys.Date()), ".csv"))
-write_csv(final.dat, paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"))
+# write_csv(final.dat, paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"))
 
 ##wide format data ----
-final.dat <- read_csv(paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240718.csv"), col_types = cols(lat = col_number(),
+final.dat <- read_csv(paste0(PATH, "/01_BioDat/occ_alltax_finalfilter_long_20240813.csv"), col_types = cols(lat = col_number(),
                                                                                                           long = col_number(),
                                                                                                           taxa_count = col_number(),
                                                                                                           dist2strm_m_nhd = col_number(),
@@ -577,4 +577,4 @@ table(fish$flw_type)
 spp <- final.dat %>%
   select(bio_type, phylum, class, order, family, subfamily, tribe, genus, species, taxa_name) %>%
   distinct()
-write_csv(spp, paste0(PATH, "/01_BioDat/species_list_complete_20240717.csv"))
+write_csv(spp, paste0(PATH, "/01_BioDat/species_list_complete_20240813.csv"))

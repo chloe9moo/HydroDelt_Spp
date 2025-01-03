@@ -8,7 +8,7 @@ options(readr.show_col_types = FALSE)
 PATH <- getwd()
 
 # pull daily flow ----
-min_yr_period <- 10 #set number of years req. for use in analyses
+min_yr_period <- 15 #set number of years req. for use in analyses
 
 ## get gage info + filter ----
 flow.gage <- data.frame()
@@ -61,7 +61,7 @@ flow.gage <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_flow_ARMOOK_info.csv"),
 site_nm <- unique(flow.gage$site_no)
 
 #latest date for flow data set
-occ <- read_csv(paste0(PATH, "/01_BioDat/occ_alltax_inthigh_long_20240626.csv"))
+occ <- read_csv(paste0(PATH, "/01_BioDat/occ_alltax_inthigh_long_20240716.csv"))
 max.date <- max(occ$date, na.rm = TRUE)
 rm(occ)
 
@@ -98,7 +98,7 @@ for(i in seq_along(site_nm)) {
 
 rm(nm, tmp.dat)
 
-## filter for 10 yr period with NO missing days----
+## filter for 15 yr period with NO missing days----
 missing_day_length <- 1 #set allowable amount of time between continuous data recordings (1 for no missing days)
 
 #set function for saving info to dataframe
@@ -187,8 +187,8 @@ for(i in seq_len(nrow(site_check))) {
     
     x <- which(t >= min_yr_period)
     
-    long <- which(t == max(t[x])) #get longest period with > 10 yrs of data
-    new <- tail(x, 1) #get most recent period with >10 yrs of data
+    long <- which(t == max(t[x])) #get longest period with > X yrs of data
+    new <- tail(x, 1) #get most recent period with > X yrs of data
     
     long.dat <- clip_time(tmp.dat, long, ind)
     m <- get_flow_dates(long.dat)
@@ -416,7 +416,7 @@ outlier_id <- df %>%
          outlier_total = rowSums(across(starts_with("outflag")), na.rm = TRUE),
          outlier_pct = round(outlier_total / ncol(df) * 100, digits = 2))
 
-write_csv(outlier_id, paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_outlier_summary.csv"))
+write_csv(outlier_id, paste0(PATH, "/02_EnvDat/raw_daily_flow/HIT_outlier_summary_20240813.csv"))
 
 #add tracking columns to na_count
 na_count$outlier_total <- outlier_id$outlier_total
@@ -498,7 +498,7 @@ g.info <- read_csv(paste0(PATH, "/02_EnvDat/usgs_gage_hit_inthigh_allinfo.csv"))
 
 #which gages to keep?
 g.info <- g.info %>%
-  mutate(final_filter = case_when(hit_ttl_yrs < 10 ~ "remove", #some sites after clipping to meet continuous time req. have less than 10 yrs of data now
+  mutate(final_filter = case_when(hit_ttl_yrs < 15 ~ "remove", #some sites after clipping to meet continuous time req. have less than 10 yrs of data now
                                   dist2strm_m_nhd > 1000 ~ "remove", #if gage is far from NHD stream (> 1 km), (which is used for ID to many env vars), remove
                                   dist2strm_m_flw > 1000 ~ "remove", #if gage is far from classified flow regimes (> 1 km), remove
                                   #sites with missing data in target HIT variables
@@ -559,6 +559,7 @@ View(out_info %>% select(ma4, ma4_adj))
 
 #notes on errors from HIT calc----
 #ignore quantile error and inflow/outflow skips
+#ignore error in 1:sum(runLengths$values == T): NA/NaN argument
 #freq high throws the error, duration high also, potentially has to do with the all flow 0 values in 1990
 #timing low, timing high
 #for all, if flood threshold is removed, values are returned, same for duration high, though some will be NA

@@ -10,13 +10,13 @@
 #SBATCH --mail-user=voorhees@uark.edu
 
 #on hpc ONLY:
-source /etc/profile.d/lmod.sh
-module load gcc/9.3.1 mkl/19.0.5 R/4.2.2
-module list
-
-cd $SLURM_SUBMIT_DIR #should be working_dir/
-cp -r * /scratch/$SLURM_JOB_ID #copy contents to scratch dir
-cd /scratch/$SLURM_JOB_ID
+# source /etc/profile.d/lmod.sh
+# module load gcc/9.3.1 mkl/19.0.5 R/4.2.2
+# module list
+# 
+# cd $SLURM_SUBMIT_DIR #should be working_dir/
+# cp -r * /scratch/$SLURM_JOB_ID #copy contents to scratch dir
+# cd /scratch/$SLURM_JOB_ID
 
 #variables
 RUNFILE="gradient_forests_rINDEX_NUMBER"
@@ -48,6 +48,6 @@ for flow in "${FLOWTYPES[@]}"; do
 	done
 done
 
-mv *.R *.sh *.txt /scrfs/storage/voorhees/home/Documents/gf_run_outputs/run_scripts/
-mv output/* /scrfs/storage/voorhees/home/Documents/gf_run_outputs/
+# mv *.R *.sh *.txt /scrfs/storage/voorhees/home/Documents/gf_run_outputs/run_scripts/
+# mv output/* /scrfs/storage/voorhees/home/Documents/gf_run_outputs/
 
