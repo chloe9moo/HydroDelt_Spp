@@ -15,6 +15,7 @@ model.run.date <- "2024_08_13" #folder of model rds's to load in
 
 #prep functions ----
 ## to match variable name with category later
+if(taxa == "bug") { taxa_label = "aquatic insect" } else { taxa_label = taxa }
 var_cat_match <- function(var_name) {
   #find which name matches
   matching_var <- sapply(env.table$variable_col_name, function(x) grepl(x, var_name))
@@ -166,7 +167,7 @@ fl.lvl <- vi.table %>%
 
 plot.df <- vi.table %>%
   group_by(flow, run_type) %>%
-  slice_max(weighted_r2, n = 10) %>%
+  # slice_max(weighted_r2, n = 10) %>%
   mutate(al = factor(interaction(flow, env_var), levels = fl.lvl))
 
 #plot
@@ -176,19 +177,23 @@ if(grepl("hydro", var.type)) { pal <- hydro.pal }
 if(grepl("baseline|alt", var.type)) { pal <- var.high.pal }
 if(grepl("lulc", var.type)) { pal <- lulc.pal }
 
-p1 <- ggplot(data = plot.df, aes(x = weighted_r2, y = al, fill = env_type)) +
-  geom_col(color = "black", linewidth = 0.1) +
-  facet_grid(vars(flow), vars(run_type), scales = "free") +
-  scale_x_continuous(expand = c(0.001,0), limits = c(0, max(vi.table$weighted_r2, na.rm = TRUE)+0.0005)) +
-  scale_y_discrete(breaks = fl.lvl, labels = sub("^[^.]+\\.", "", fl.lvl), name = "") +
-  scale_fill_manual(values = pal, name = "Variable Type") +
-  labs(x = expression(paste(R^2, " weighted importance"))) +
+p1 <- ggplot(data = plot.df, aes(y = weighted_r2, x = al, fill = run_type)) +
+  geom_col(color = "black", linewidth = 0.1, position = "dodge") +
+  # facet_grid(vars(flow), vars(run_type), scales = "free") +
+  facet_wrap(~ flow, scales = "free", ncol = 1) +
+  # scale_y_continuous(expand = c(0.001,0), limits = c(0, max(vi.table$weighted_r2, na.rm = TRUE)+0.0005)) +
+  scale_x_discrete(breaks = fl.lvl, labels = sub("^[^.]+\\.", "", fl.lvl), name = "") +
+  scale_fill_manual(values = type.pal, name = "Assemblage Type") +
+  labs(y = expression(paste(R^2, " weighted importance"))) +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+  ggtitle(label = taxa_label) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         legend.position = "bottom",
-        panel.spacing.x = unit(1, "lines"))
+        panel.spacing.x = unit(1, "lines"),
+        axis.text = element_text(size = 12), axis.title = element_text(size = 12),
+        strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 12))
 p1
-ggsave(paste0(PATH, "/99_figures/var_imp_barchart_", save.file.name, ".png"), plot = p1, width = 8, height = 8)
+ggsave(paste0(PATH, "/99_figures/var_imp_barchart_", save.file.name, ".png"), plot = p1, width = 12, height = 15)
 
 ###dot plot ----
 library(tidytext)
@@ -211,24 +216,26 @@ top.vars <- plot.df %>%
   select(env_fac) %>% distinct()
 top.vars <- as.character(top.vars$env_fac)
 
-p2 <- ggplot(data = plot.df[plot.df$env_fac %in% top.vars, ]) +
-  geom_point(aes(x = weighted_r2, y = env_fac, shape = flow, fill = flow), size=4, alpha=0.7) +
+p2 <- ggplot(data = plot.df) +
+  geom_point(aes(y = weighted_r2, x = env_fac, shape = flow, fill = flow), size=4, alpha=0.7) +
   facet_wrap(~facet.group, scales = 'free', nrow = 2) +
   scale_fill_manual(values = c(flow.pal, "mean" = "black"), name = "Flow", breaks = c("mean", "GW", "Int", "RO")) +
   scale_shape_manual('Flow', values = c("GW" = 21, "Int" = 23, "RO" = 24, "mean" = 8), breaks = c("mean", "GW", "Int", "RO")) +
-  scale_color_manual(values = var.high.pal) +
-  scale_y_reordered() +
-  labs(x = expression(paste(R^2, " weighted importance")), y = "") +
+  # scale_color_manual(values = var.high.pal) +
+  ggtitle(label = taxa_label) +
+  scale_x_reordered() +
+  labs(y = expression(paste(R^2, " weighted importance")), x = "") +
   # scale_x_continuous(limits = c(0, 0.02)) +
   # theme_classic() +
-  theme(panel.grid.major.y = element_line(color="lightgrey"),
-        panel.grid.major.x = element_blank(),
+  theme(panel.grid.major.x = element_line(color="lightgrey"),
+        panel.grid.major.y = element_line(color = "lightgrey"),
         panel.border = element_rect(color = "black", fill = NA),
         panel.background = element_rect(fill = "white"),
         strip.background = element_rect(fill = "white", color = "black"),
         strip.text = element_text(size = 10, face = "bold"),
         plot.background = element_rect(fill = 'white'),
         axis.text = element_text(size = 10, color = "black"),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         axis.title = element_text(size = 10),
         legend.key = element_rect(fill = "white"),
         legend.title = element_text(size=10),
@@ -236,7 +243,7 @@ p2 <- ggplot(data = plot.df[plot.df$env_fac %in% top.vars, ]) +
         legend.box.margin=margin(0,0,0,0))
 
 p2
-ggsave(paste0(PATH, "/99_figures/var_imp_dotplot_", save.file.name, ".png"), plot = p2, width = 8, height = 6)
+ggsave(paste0(PATH, "/99_figures/var_imp_dotplot_", save.file.name, ".png"), plot = p2, width = 12, height = 8)
 
 # df <- data.frame(hydro.pal) %>% rownames_to_column("type") %>% mutate(type = factor(type, levels = c("timing", "rate of change", "magnitude", "frequency", "duration",
 #                                                                                                      "stream temperature", "summarized flow")))
@@ -255,21 +262,32 @@ ggsave(paste0(PATH, "/99_figures/var_imp_dotplot_", save.file.name, ".png"), plo
 
 ### box plot ----
 plot.df <- vi.table %>%
-  mutate(flow = factor(flow, levels = c("RO", "GW", "Int")))
+  mutate(flow = factor(flow, levels = c("RO", "GW", "Int")),
+         env_type = gsub(" ", "\n", env_type))
+max.r2 <- plot.df %>% group_by(flow, run_type, env_type) %>% slice_max(weighted_r2, n = 1) %>%
+  mutate(y_coord = ifelse(weighted_r2 < 0.015, weighted_r2 + 0.001, weighted_r2 - 0.001),
+         env_var = gsub("_water_temp_", "_", env_var)) %>%
+  mutate(y_coord = ifelse(env_var == "mh13", y_coord + 0.001, y_coord))
 ggplot(data = plot.df) +
   geom_boxplot(aes(x = env_type, y = weighted_r2, fill = flow), outlier.shape = NA, show.legend = F) +
   geom_point(aes(x = env_type, y = weighted_r2, fill = flow), 
-             position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), alpha = 0.4, size = 2) +
+             position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75, seed = 1), alpha = 0.4, size = 2) +
+  geom_text(data = max.r2[max.r2$env_type != "stream\ntemperature",],  aes(x = env_type, y = y_coord, label = env_var,  shape = flow),
+            position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75, seed = 1)) +
+  geom_text(data = max.r2[max.r2$env_type == "stream\ntemperature",],  aes(x = env_type, y = y_coord, label = env_var,  shape = flow),
+            position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75, seed = 1),
+            angle = 330, hjust = 0.9) +
   facet_wrap(~ run_type, scales = "free_y", nrow = 2) +
   scale_fill_manual(values = flow.pal) +
   labs(y = expression(paste(R^2, " weighted importance")), x = "") +
   guides(fill = guide_legend("Flow Regime", override.aes = list(shape = 22, alpha = 1, size = 5))) +
+  ggtitle(taxa_label) +
   theme(panel.grid.major.y = element_line(color="lightgrey"),
         panel.grid.major.x = element_blank(),
         panel.border = element_rect(color = "black", fill = NA),
         panel.background = element_rect(fill = "white"),
         strip.background = element_rect(fill = "lightgray", color = "black"),
-        strip.text = element_text(size = 10, face = "bold"),
+        # strip.text = element_text(size = 10, face = "bold"),
         plot.background = element_rect(fill = 'white'),
         axis.text = element_text(size = 10, color = "black"),
         # axis.text.x = element_text(angle = 20, hjust = 0.9, vjust = 1),
@@ -280,51 +298,63 @@ ggplot(data = plot.df) +
         legend.box.margin=margin(0,0,0,0))
 ggsave(paste0(PATH, "/99_figures/var_imp_boxplot_", save.file.name, ".png"), width = 8, height = 8)
 
+### summarize for text ----
+vi.summ <- vi.table %>%
+  group_by(flow, run_type) %>%
+  mutate(rank = dense_rank(desc(weighted_r2))) %>%
+  filter(rank <= 5)
+
+vi.table %>%
+  group_by(flow) %>%
+  summarise(mn_r2 = mean(weighted_r2),
+            med_r2 = median(weighted_r2),
+            max_r2 = max(weighted_r2))
+
 ### density plot ----
-env_vals <- lapply(gf.list, function(gf.out) {
-  
-  env <- gf.out$X
-  # env <- env[, names(env) %in% top.vars]
-  env <- env %>%
-    pivot_longer(cols = everything(), names_to = "env_var", values_to = "value") %>%
-    add_info_cols(., gf_model = gf.out)
-  
-  return(env)
-  
-})
-
-env_vals <- bind_rows(env_vals)
-
-if(var.type == "lulc") {
-  env_vals <- add_nlcd_names(env_vals)
-}
-
-plot.df <- env_vals[env_vals$env_var %in% c("th1", "phase", "mn_water_temp_spring", "mn_water_temp_fall", "ma4", "ta3"), ]
-# plot.df <- plot.df %>% 
-#   filter((env_var == "pnTL1" & value < 10) | (env_var == "mh20" & value < 200) | grepl("wtemp", env_var) | (env_var == "ma11" & value > 0))
-  # filter((env_var == "ma41" & value < 40) | (env_var == "mh20" & value < 200) | grepl("wtemp|ra5", env_var))
-
-p3 <- ggplot() +
-  geom_density(data = plot.df, aes(x = value, fill = flow), alpha = 0.6) +
-  facet_wrap(~ env_var, scales = "free") +
-  scale_fill_manual(values = flow.pal, name = "Flow") +
-  scale_y_continuous(expand = c(0, 0)) +
-  labs(x = "") +
-  theme(panel.grid.major = element_blank(),
-        panel.border = element_rect(color = "black", fill = NA),
-        panel.background = element_rect(fill = "white"),
-        strip.background = element_rect(fill = "white", color = "black"),
-        strip.text = element_text(size = 20, face = "bold"),
-        plot.background = element_rect(fill = 'white'),
-        axis.text = element_text(size=20),
-        axis.title = element_text(size=20),
-        legend.key = element_rect(fill = "white"),
-        legend.title = element_text(size=20),
-        legend.text = element_text(size=20),
-        legend.box.margin=margin(0,0,0,0))
-p3
-
-ggsave(paste0(PATH, "/99_figures/env_var_density_", save.file.name, ".png"), plot = p3, width = 15, height = 8)
+# env_vals <- lapply(gf.list, function(gf.out) {
+#   
+#   env <- gf.out$X
+#   # env <- env[, names(env) %in% top.vars]
+#   env <- env %>%
+#     pivot_longer(cols = everything(), names_to = "env_var", values_to = "value") %>%
+#     add_info_cols(., gf_model = gf.out)
+#   
+#   return(env)
+#   
+# })
+# 
+# env_vals <- bind_rows(env_vals)
+# 
+# if(var.type == "lulc") {
+#   env_vals <- add_nlcd_names(env_vals)
+# }
+# 
+# plot.df <- env_vals[env_vals$env_var %in% c("th1", "phase", "mn_water_temp_spring", "mn_water_temp_fall", "ma4", "ta3"), ]
+# # plot.df <- plot.df %>% 
+# #   filter((env_var == "pnTL1" & value < 10) | (env_var == "mh20" & value < 200) | grepl("wtemp", env_var) | (env_var == "ma11" & value > 0))
+#   # filter((env_var == "ma41" & value < 40) | (env_var == "mh20" & value < 200) | grepl("wtemp|ra5", env_var))
+# 
+# p3 <- ggplot() +
+#   geom_density(data = plot.df, aes(x = value, fill = flow), alpha = 0.6) +
+#   facet_wrap(~ env_var, scales = "free") +
+#   scale_fill_manual(values = flow.pal, name = "Flow") +
+#   scale_y_continuous(expand = c(0, 0)) +
+#   labs(x = "") +
+#   theme(panel.grid.major = element_blank(),
+#         panel.border = element_rect(color = "black", fill = NA),
+#         panel.background = element_rect(fill = "white"),
+#         strip.background = element_rect(fill = "white", color = "black"),
+#         strip.text = element_text(size = 20, face = "bold"),
+#         plot.background = element_rect(fill = 'white'),
+#         axis.text = element_text(size=20),
+#         axis.title = element_text(size=20),
+#         legend.key = element_rect(fill = "white"),
+#         legend.title = element_text(size=20),
+#         legend.text = element_text(size=20),
+#         legend.box.margin=margin(0,0,0,0))
+# p3
+# 
+# ggsave(paste0(PATH, "/99_figures/env_var_density_", save.file.name, ".png"), plot = p3, width = 15, height = 8)
 
 #cumulative importance ----
 ##curves ----
@@ -376,31 +406,61 @@ ci.cur <- bind_rows(ci.cur)
 ci.cur <- add_nlcd_names(ci.cur)
 
 ##line plot ----
-# plot.df <- ci.cur[ci.cur$env_var %in% tail(levels(top.vars), n = 3), ]
-plot.df <- ci.cur[ci.cur$env_var %in% c("th1", "phase", "mn_water_temp_spring", "mn_water_temp_fall", "ma4", "ta3"), ]
+ci.cur <- ci.cur %>%
+  left_join(select(vi.summ, env_var, flow, run_type, rank))
+plot.df <- ci.cur %>% filter(!is.na(rank))
 
-p4 <- ggplot(data = plot.df, aes(x = var_val, y = cum_imp)) +
-  geom_line(aes(color = flow, linetype = run_type)) +
+p4 <- ggplot(data = plot.df[plot.df$run_type == "taxonomic",], aes(x = var_val, y = cum_imp)) +
+  geom_line(aes(color = flow)) +
   scale_color_manual(values = flow.pal, name = "Flow") +
   scale_linetype_manual(values = c("dashed", "solid"), name = "") +
-  facet_wrap(~env_var, scales = "free") +
-  labs(y = bquote("Cumulative Importance (" * italic(R[" c"]^2) * ")"), x = "") +
+  scale_y_continuous(n.breaks = 3) +
+  scale_x_continuous(n.breaks = 4) +
+  facet_wrap(flow~env_var, scales = "free") +
+  labs(y = bquote("Cumulative Importance (" * italic(R[" c"]^2) * "), taxonomic composition"), x = "") +
+  ggtitle(taxa_label) +
   theme(
     panel.grid = element_line(color = "lightgray"),
     panel.border = element_rect(color = "black", fill = NA),
     panel.background = element_rect(fill = "white"),
     strip.background = element_rect(fill = "white", color = "black"),
-    strip.text = element_text(size = 12, face = "bold"),
+    strip.text = element_text(size = 10),
     plot.background = element_rect(fill = 'white'),
     axis.text = element_text(size=12),
     legend.key = element_rect(fill = "white"),
     legend.title = element_text(size=12),
     legend.text = element_text(size=12),
-    legend.box.margin=margin(0,0,0,0)
+    legend.box.margin=margin(0,0,0,0),
+    legend.position = "none"
   )
 p4
+ggsave(paste0(PATH, "/99_figures/cumulimp_curve_taxonomic_", save.file.name, ".png"), plot = p4, width = 11, height = 7)
 
-ggsave(paste0(PATH, "/99_figures/cumulimp_curve_", save.file.name, ".png"), plot = p4, width = 9, height = 6)
+p5 <- ggplot(data = plot.df[plot.df$run_type == "trait",], aes(x = var_val, y = cum_imp)) +
+  geom_line(aes(color = flow)) +
+  scale_color_manual(values = flow.pal, name = "Flow") +
+  scale_linetype_manual(values = c("dashed", "solid"), name = "") +
+  scale_y_continuous(n.breaks = 3) +
+  scale_x_continuous(n.breaks = 4) +
+  facet_wrap(flow~env_var, scales = "free") +
+  labs(y = bquote("Cumulative Importance (" * italic(R[" c"]^2) * "), trait composition"), x = "") +
+  ggtitle(taxa_label) +
+  theme(
+    panel.grid = element_line(color = "lightgray"),
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white", color = "black"),
+    strip.text = element_text(size = 10),
+    plot.background = element_rect(fill = 'white'),
+    axis.text = element_text(size=12),
+    legend.key = element_rect(fill = "white"),
+    legend.title = element_text(size=12),
+    legend.text = element_text(size=12),
+    legend.box.margin=margin(0,0,0,0),
+    legend.position = "none"
+  )
+p5
+ggsave(paste0(PATH, "/99_figures/cumulimp_curve_trait_", save.file.name, ".png"), plot = p5, width = 11, height = 7)
 
 #ind. species/trait curves ----
 ##species performance ----
@@ -461,6 +521,43 @@ ggplot(data = plot.df[plot.df$name_frac %in% top.spp, ]) +
 
 ggsave(paste0(PATH, "/99_figures/species_performance_", save.file.name, ".png"), width = 7, height = 7)
 
+df1 <- plot.df %>%
+  filter(run_type == "taxonomic" & flow != "mean") %>%
+  mutate(name_flow = paste(name, flow, sep = "___")) %>%
+  # compute order within each flow and turn into a factor with those levels
+  group_by(flow) %>%
+  mutate(name_flow = fct_reorder(name_flow, perf, .desc = FALSE),
+         grp = if_else(perf <= 0.4, "low", "high")) %>%
+  ungroup()
+
+ggplot(data = df1, aes(x = perf, y = name_flow, fill = flow)) +
+  # geom_point() +
+  geom_col(color = "black", linewidth = 0.1) +
+  # facet_grid(vars(flow), vars(run_type), scales = "free") +
+  facet_wrap(grp ~ flow, scales = "free") +
+  scale_x_continuous(breaks = c(0, 0.5, 1.0), limits = c(0,1)) +
+  scale_y_discrete(labels = function(x) sub("___.*$", "", x)) +
+  scale_fill_manual(values = flow.pal, name = "Assemblage Type") +
+  labs(x = expression(R^2)) +
+  theme_bw() +
+  ggtitle(label = taxa_label) +
+  theme(#axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1),
+        legend.position = "none",
+        panel.spacing.x = unit(1, "lines"),
+        axis.text = element_text(size = 12), axis.title = element_text(size = 12),
+        strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 12))
+# ggsave(paste0(PATH, "/99_figures/species_performance_barchart_taxo_", save.file.name, ".png"), width = 14, height = 16)
+
+##too big, make table instead
+summ.sp.perf <- sp.perf %>%
+  mutate(perf = round(perf, digits = 3),
+         name = gsub("_", " ", name)) %>%
+  pivot_wider(names_from = flow, values_from = c(perf, rank)) %>%
+  arrange(run_type, name) %>%
+  select(-taxa) %>%
+  relocate(run_type, name, perf_GW, rank_GW, perf_Int, rank_Int, perf_RO, rank_RO)
+write_csv(summ.sp.perf, paste0(PATH, "/98_result_tables/taxa_performance_r2_", taxa, "_formatted.csv"))
+
 ##species cumulative importance ----
 sp.cur <- lapply(gf.list, function(gf.out) { 
   
@@ -494,37 +591,45 @@ sp.cur <- bind_rows(sp.cur)
 write.csv(sp.cur, paste0(PATH, "/98_result_tables/species_cum_imp_", save.file.name, ".csv"))
 
 ###plot ----
-# plot.df <- sp.cur[sp.cur$env_var %in% tail(levels(top.vars), n = 3) & sp.cur$name %in% head(levels(top.spp), n = 10), ]
-plot.df.trait <- sp.cur[sp.cur$env_var %in% c("th1", "phase", "mn_water_temp_spring", "mn_water_temp_fall", "ma4", "ta3") & sp.cur$run_type == "trait", ]
-plot.df.tax <- sp.cur[sp.cur$env_var %in% c("th1", "phase", "mn_water_temp_spring", "mn_water_temp_fall", "ma4", "ta3") & sp.cur$run_type == "taxonomic", ]
+sp.cur.plot <- sp.cur %>%
+  left_join(select(vi.summ, env_var, flow, run_type, rank)) %>%
+  filter(!is.na(rank) & !is.nan(cumul_imp) & !(name == "Morone_saxatilis" & flow == "GW" & run_type == "taxonomic"))
 
-ggplot(data = plot.df.trait, aes(x = var_val, y = cumul_imp)) +
+ggplot(data = sp.cur.plot[sp.cur.plot$run_type == "taxonomic",], aes(x = var_val, y = cumul_imp)) +
   geom_line(aes(color = name)) +
   # scale_color_manual(values = flow.pal, name = "Flow Class") +
   # scale_linetype_manual(values = c("imp. variable" = "solid", "not" = "dashed"), name = "") +
-  facet_grid(flow ~ env_var, scales = "free") +
-  labs(y = bquote("Cumulative Importance (" * italic(R[" c"]^2) * ")"), x = "") +
+  facet_wrap(flow ~ env_var, scales = "free", nrow = 3) +
+  labs(y = bquote("Cumulative Importance (" * italic(R[" c"]^2) * ") for taxonomic composition"), x = "") +
+  scale_color_discrete(breaks = unique((sp.perf %>% filter(run_type == "taxonomic" & rank <= 5))$name),
+                       name = "Best fit species\nfor each flow regime") +
   theme_bw() +
+  ggtitle(taxa_label) +
   theme(
-    legend.position = "none",
+    # legend.position = "none",
+    axis.title.x = element_blank(),
+    axis.text = element_text(color = "black"),
+    panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed")
+  )
+ggsave(paste0(PATH, "/99_figures/cumulimp_curve_spplevel_", taxa, "_taxonomic.png"), width = 13, height = 10)
+
+ggplot(data = sp.cur.plot[sp.cur.plot$run_type == "trait",], aes(x = var_val, y = cumul_imp)) +
+  geom_line(aes(color = name)) +
+  # scale_color_manual(values = flow.pal, name = "Flow Class") +
+  # scale_linetype_manual(values = c("imp. variable" = "solid", "not" = "dashed"), name = "") +
+  facet_wrap(flow ~ env_var, scales = "free", nrow = 3) +
+  labs(y = bquote("Cumulative Importance (" * italic(R[" c"]^2) * ") for trait composition"), x = "") +
+  scale_color_discrete(breaks = unique((sp.perf %>% filter(run_type == "trait" & rank <= 5))$name),
+                       name = "Best fit modality\nfor each flow regime") +
+  theme_bw() +
+  ggtitle(taxa_label) +
+  theme(
+    # legend.position = "none",
     axis.title.x = element_blank(),
     axis.text.x = element_text(color = "black", angle = 35, hjust = 0.9, vjust = 1.01),
     panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed")
   )
-
-ggplot(data = plot.df.tax, aes(x = var_val, y = cumul_imp)) +
-  geom_line(aes(color = name)) +
-  # scale_color_manual(values = flow.pal, name = "Flow Class") +
-  # scale_linetype_manual(values = c("imp. variable" = "solid", "not" = "dashed"), name = "") +
-  facet_grid(flow ~ env_var, scales = "free") +
-  labs(y = bquote("Cumulative Importance (" * italic(R[" c"]^2) * ")"), x = "") +
-  theme_bw() +
-  theme(
-    legend.position = "none",
-    axis.title.x = element_blank(),
-    axis.text.x = element_text(color = "black", angle = 35, hjust = 0.9, vjust = 1.01),
-    panel.grid.major.y = element_line(color = "lightgrey", linetype = "dashed")
-  )
+ggsave(paste0(PATH, "/99_figures/cumulimp_curve_spplevel_", taxa, "_trait.png"), width = 13, height = 10)
   
 # p4
 # ggsave(paste0(PATH, "/99_figures/cumulimp_curve_", save.file.name, ".png"), plot = p4, width = 5, height = 5)
@@ -586,7 +691,8 @@ sc.thresh <- lapply(gf.list, function(gf.out) {
     var <- c(var, t)
     
     #scale + center
-    sc.var <- scale(var)
+    sc.var <- (var - min(var)) / (max(var) - min(var))
+    # sc.var <- scale(var)
     
     #find scaled threshold
     if(is.na(t)) { new.thresh <- NA } else { new.thresh <- sc.var[which(var == t)] }
@@ -654,6 +760,15 @@ if(grepl("hydro", var.type)) {
                                                   "stream temperature", "summarized flow")))
 }
 
+write_csv(plot.df, paste0(PATH, "/98_result_tables/normalized_threshold_comparison_residuals_", taxa, ".csv"))
+
+plot.df %>% 
+  mutate(diff_zero = abs(resid) - 0) %>% 
+  mutate(diff_zero_group = round(diff_zero, 2)) %>% 
+  group_by(flow, diff_zero_group, env_type) %>% 
+  summarise(num_occ = n()) %>% 
+  View()
+
 most.diff <- plot.df %>%
   filter(!is.na(resid)) %>%
   arrange(resid) %>%
@@ -705,84 +820,149 @@ ggplot() +
 ggsave(paste0(PATH, "/99_figures/threshold_comparison_point_byflow_", save.file.name, ".png"), width = 10, height = 6)  
 
 ## residual comparison ----
-plot.df <- plot.df %>%
-  mutate(resid = trait - taxonomic)
-y_lim <- max(abs(floor(min(plot.df$resid, na.rm = T))), ceiling(max(plot.df$resid, na.rm = T)))
-sum.df <- plot.df %>%
-  group_by(env_type, flow) %>%
-  summarise(mn_resid = mean(resid, na.rm = T), sd_resid = sd(resid, na.rm = T))
+if(TRUE) {
+ 
+  plot.df.r <- plot.df %>% mutate(
+    env_type2 = if_else(env_type != "stream temperature" & !env_var %in% c("amplitude", "phase") & !grepl("tau|ar", env_var), TRUE, FALSE),
+    index = row_number()) %>%
+    mutate(env_type2 = case_when(env_type2 == TRUE & grepl("h", env_var) ~ "high flow",
+                                 env_type2 == TRUE & grepl("l", env_var) ~ "low flow",
+                                 env_type2 == TRUE & grepl("a", env_var) ~ "avg flow",
+                                 env_type == "stream temperature" ~ "stream temp",
+                                 T ~ "mag6"))
+  most.diff <- plot.df.r %>%
+    filter(abs(resid) > 0.45) %>%
+    filter(!is.na(resid)) %>%
+    group_by(flow, env_type) %>%
+    arrange(resid) %>%
+    slice(c(head(row_number(), 1), tail(row_number(), 1))) %>%
+    distinct() %>%
+    mutate(nudge_y = case_when(resid < 0 ~ -0.2, 
+                               resid > 0 & resid < 0.8 ~ 0.2,
+                               resid >= 0.8 ~ 0))
+  sum.df <- plot.df.r %>%
+    group_by(env_type, flow) %>%
+    summarise(mn_resid = mean(resid, na.rm = T), sd_resid = sd(resid, na.rm = T))
+  p1 <- ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_point(data = plot.df.r[!plot.df.r$index %in% most.diff$index,], aes(x = env_type, y = resid), size = 3, position = position_jitter(width = 0.2), alpha = 0.4) +
+    geom_point(data = most.diff, aes(x = env_type, y = resid), size = 3, alpha = 0.4) +
+    geom_linerange(data = sum.df, aes(x = env_type, ymin = mn_resid - sd_resid, ymax = mn_resid + sd_resid, color = env_type), linewidth = 1) +
+    geom_point(data = sum.df, aes(x = env_type, y = mn_resid, color = env_type), shape = 18, size = 7) +
+    ggrepel::geom_text_repel(
+      data = most.diff,
+      aes(x = env_type, y = resid, label = env_var),
+      # max.overlaps = Inf,
+      min.segment.length = 0,
+      force = 5,                          # still helps spreading
+      force_pull = 0,
+      nudge_y = most.diff$nudge_y
+    ) +
+    facet_wrap(~ flow) +
+    # scale_color_manual(values = flow.pal, name = "Flow Regime") +
+    scale_color_manual(values = hydro.pal, name = "") +
+    scale_y_continuous(limits = c(-1, 1), labels = c("higher\ntaxonomic\nthreshold", "", "equivalent\nthresholds", "", "higher\ntrait\nthreshold")) +
+    labs(x = "hydrology category", y = "residuals for 1:1 taxonomic:trait threshold relationship") +
+    theme_bw() +
+    ggtitle(taxa_label) +
+    theme(legend.position = "none",
+          axis.title.x = element_text(margin = margin(t = 10, unit = "pt")),
+          axis.title.y = element_text(margin = margin(r = 10, unit = "pt")),
+          axis.text = element_text(color = "black"),
+          axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))
+  
+  most.diff <- plot.df.r %>%
+    filter(abs(resid) > 0.45) %>%
+    filter(!is.na(resid)) %>%
+    group_by(flow) %>%
+    arrange(resid) %>%
+    slice(c(head(row_number(), 1), tail(row_number(), 1))) %>%
+    distinct()
+  sum.df <- plot.df.r %>%
+    group_by(flow) %>%
+    summarise(mn_resid = mean(resid, na.rm = T), sd_resid = sd(resid, na.rm = T))
+  
+  p2 <- ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_point(data = plot.df.r, aes(x = flow, y = resid), size = 3, position = position_jitter(width = 0.2), alpha = 0.4) +
+    # geom_point(data = most.diff, aes(x = flow, y = resid), size = 3, alpha = 0.4) +
+    geom_linerange(data = sum.df, aes(x = flow, ymin = mn_resid - sd_resid, ymax = mn_resid + sd_resid, color = flow), linewidth = 1) +
+    geom_point(data = sum.df, aes(x = flow, y = mn_resid, color = flow), shape = 18, size = 7) +
+    # ggrepel::geom_text_repel(data = most.diff, aes(x = flow, y = resid, label = env_var), min.segment.length = 0.2, force_pull = 0) +
+    # facet_wrap(~ flow) +
+    scale_color_manual(values = flow.pal, name = "Flow Regime") +
+    scale_y_continuous(limits = c(-1, 1), labels = c("higher\ntaxonomic\nthreshold", "", "equivalent\nthresholds", "", "higher\ntrait\nthreshold")) +
+    labs(x = "flow regime", y = "residuals for 1:1 taxonomic:trait threshold relationship") +
+    theme_bw() +
+    theme(legend.position = "none",
+          axis.text = element_text(color = "black"),
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          axis.title.x = element_text(margin = margin(t = 1.8, unit = "cm")),
+          plot.margin = unit(c(1.4, 0.3, 0.1, 0), "cm"))
+  
+  p3 <- ggpubr::ggarrange(p1, p2, nrow = 1, widths = c(3.5, 1), heights = c(2, 0.9))
+  ggsave(paste0(PATH, "/99_figures/threshold_comparison_resid-only_", taxa, ".png"), plot = p3, width = 10, height = 6)
+   
+}
 
-ggplot() +
-  geom_hline(yintercept = 0) +
-  geom_point(data = plot.df, aes(x = env_type, y = resid), position = position_jitter(width = 0.2), alpha = 0.4) +
-  geom_point(data = sum.df, aes(x = env_type, y = mn_resid, color = flow), size = 5) +
-  geom_linerange(data = sum.df, aes(x = env_type, ymin = mn_resid - sd_resid, ymax = mn_resid + sd_resid, color = flow), linewidth = 1) +
-  facet_wrap(~ flow) +
-  scale_color_manual(values = flow.pal, name = "Flow Regime") +
-  # scale_color_manual(values = pal, name = "Variable Type") +
-  scale_y_continuous(limits = c(y_lim*-1, y_lim)) +
-  labs(x = "variable type", y = "residuals for 1:1 relationship") +
-  theme_bw() +
-  theme(legend.position = "none")
-
-
-##flow comp ----
-plot.df <- thresh %>%
-  select(-weighted_R2, -thresh) %>%
-  pivot_wider(names_from = flow, values_from = sc.thresh)
-
-theme_flow_thresh <- list(
-  scale_fill_manual(values = pal, name = "Variable Type"),
-  scale_color_manual(values = pal, name = "Variable Type"),
-  scale_linetype_manual('Run Type', values = c("solid", "longdash")), 
-  coord_fixed(ratio = 1),
-  guides(fill = guide_legend("Variable Type", override.aes = list(linetype = 0, alpha = 1, size = 5)),
-         linetype = guide_legend("Assemblage Type", override.aes = list(linetype = c("solid", "dashed"), color = "black", linewidth = 1))),
-  scale_x_continuous(limits = c(-3.5, 3)),
-  scale_y_continuous(limits = c(-2.5, 3)),
-  theme(
-    panel.grid = element_line(color = "lightgray"),
-    axis.line = element_line(color = "black"),
-    # panel.border = element_rect(color = "black", fill = NA),
-    panel.background = element_rect(fill = "white"),
-    plot.background = element_rect(fill = 'white'),
-    axis.text = element_text(size=10),
-    axis.title = element_text(size=10),
-    legend.key = element_rect(fill = "white"),
-    legend.key.width = unit(2, "lines"),
-    legend.title = element_text(size=10),
-    legend.text = element_text(size=10),
-    legend.box.margin=margin(0,0,0,0), 
-    legend.direction = "vertical"
-  ) 
-)
-
-pA <- ggplot() +
-  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
-  # stat_ellipse(data = plot.df, aes(x = taxonomic, y = trait, color = flow), type = "norm", linewidth = 1.5, alpha = 0.6) +
-  geom_point(data = plot.df, aes(x = GW, y = Int, fill = env_type), shape = 21, size = 3, alpha = 0.3) +
-  geom_smooth(data = plot.df, method = "lm", formula='y~x', aes(x = GW, y = Int, color = env_type, linetype = run_type), linewidth = 1.5, se = F) +
-  labs(x = bquote("normalized" ~ bold("groundwater") ~ "threshold value"), y = bquote("normalized" ~ bold("intermittent") ~ "threshold value")) +
-  theme_flow_thresh
-
-pB <- ggplot() +
-  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
-  # stat_ellipse(data = plot.df, aes(x = taxonomic, y = trait, color = flow), type = "norm", linewidth = 1.5, alpha = 0.6) +
-  geom_point(data = plot.df, aes(x = GW, y = RO, fill = env_type), shape = 21, size = 3, alpha = 0.3) +
-  geom_smooth(data = plot.df, method = "lm", formula='y~x', aes(x = GW, y = RO, color = env_type, linetype = run_type), linewidth = 1.5, se = F) +
-  labs(x = bquote("normalized" ~ bold("groundwater") ~ "threshold value"), y = bquote("normalized" ~ bold("runoff") ~ "threshold value")) +
-  theme_flow_thresh
-
-pC <- ggplot() +
-  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
-  # stat_ellipse(data = plot.df, aes(x = taxonomic, y = trait, color = flow), type = "norm", linewidth = 1.5, alpha = 0.6) +
-  geom_point(data = plot.df, aes(x = Int, y = RO, fill = env_type), shape = 21, size = 3, alpha = 0.3) +
-  geom_smooth(data = plot.df, method = "lm", formula='y~x', aes(x = Int, y = RO, color = env_type, linetype = run_type), linewidth = 1.5, se = F) +
-  labs(x = bquote("normalized" ~ bold("intermittent") ~ "threshold value"), y = bquote("normalized" ~ bold("runoff") ~ "threshold value")) +
-  theme_flow_thresh
-
-ggpubr::ggarrange(pA, pB, pC, nrow = 1, legend = "bottom", common.legend = TRUE)
-ggsave(paste0(PATH, "/99_figures/threshold_flowregime_comparison_point_", save.file.name, ".png"), width = 15, height = 6, bg = "white")
+# ##flow comp ----
+# plot.df <- thresh %>%
+#   select(-weighted_R2, -thresh) %>%
+#   pivot_wider(names_from = flow, values_from = sc.thresh)
+# 
+# theme_flow_thresh <- list(
+#   scale_fill_manual(values = pal, name = "Variable Type"),
+#   scale_color_manual(values = pal, name = "Variable Type"),
+#   scale_linetype_manual('Run Type', values = c("solid", "longdash")), 
+#   coord_fixed(ratio = 1),
+#   guides(fill = guide_legend("Variable Type", override.aes = list(linetype = 0, alpha = 1, size = 5)),
+#          linetype = guide_legend("Assemblage Type", override.aes = list(linetype = c("solid", "dashed"), color = "black", linewidth = 1))),
+#   scale_x_continuous(limits = c(-3.5, 3)),
+#   scale_y_continuous(limits = c(-2.5, 3)),
+#   theme(
+#     panel.grid = element_line(color = "lightgray"),
+#     axis.line = element_line(color = "black"),
+#     # panel.border = element_rect(color = "black", fill = NA),
+#     panel.background = element_rect(fill = "white"),
+#     plot.background = element_rect(fill = 'white'),
+#     axis.text = element_text(size=10),
+#     axis.title = element_text(size=10),
+#     legend.key = element_rect(fill = "white"),
+#     legend.key.width = unit(2, "lines"),
+#     legend.title = element_text(size=10),
+#     legend.text = element_text(size=10),
+#     legend.box.margin=margin(0,0,0,0), 
+#     legend.direction = "vertical"
+#   ) 
+# )
+# 
+# pA <- ggplot() +
+#   geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+#   # stat_ellipse(data = plot.df, aes(x = taxonomic, y = trait, color = flow), type = "norm", linewidth = 1.5, alpha = 0.6) +
+#   geom_point(data = plot.df, aes(x = GW, y = Int, fill = env_type), shape = 21, size = 3, alpha = 0.3) +
+#   geom_smooth(data = plot.df, method = "lm", formula='y~x', aes(x = GW, y = Int, color = env_type, linetype = run_type), linewidth = 1.5, se = F) +
+#   labs(x = bquote("normalized" ~ bold("groundwater") ~ "threshold value"), y = bquote("normalized" ~ bold("intermittent") ~ "threshold value")) +
+#   theme_flow_thresh
+# 
+# pB <- ggplot() +
+#   geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+#   # stat_ellipse(data = plot.df, aes(x = taxonomic, y = trait, color = flow), type = "norm", linewidth = 1.5, alpha = 0.6) +
+#   geom_point(data = plot.df, aes(x = GW, y = RO, fill = env_type), shape = 21, size = 3, alpha = 0.3) +
+#   geom_smooth(data = plot.df, method = "lm", formula='y~x', aes(x = GW, y = RO, color = env_type, linetype = run_type), linewidth = 1.5, se = F) +
+#   labs(x = bquote("normalized" ~ bold("groundwater") ~ "threshold value"), y = bquote("normalized" ~ bold("runoff") ~ "threshold value")) +
+#   theme_flow_thresh
+# 
+# pC <- ggplot() +
+#   geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+#   # stat_ellipse(data = plot.df, aes(x = taxonomic, y = trait, color = flow), type = "norm", linewidth = 1.5, alpha = 0.6) +
+#   geom_point(data = plot.df, aes(x = Int, y = RO, fill = env_type), shape = 21, size = 3, alpha = 0.3) +
+#   geom_smooth(data = plot.df, method = "lm", formula='y~x', aes(x = Int, y = RO, color = env_type, linetype = run_type), linewidth = 1.5, se = F) +
+#   labs(x = bquote("normalized" ~ bold("intermittent") ~ "threshold value"), y = bquote("normalized" ~ bold("runoff") ~ "threshold value")) +
+#   theme_flow_thresh
+# 
+# ggpubr::ggarrange(pA, pB, pC, nrow = 1, legend = "bottom", common.legend = TRUE)
+# ggsave(paste0(PATH, "/99_figures/threshold_flowregime_comparison_point_", save.file.name, ".png"), width = 15, height = 6, bg = "white")
 
 ##boxplot ----
 ggplot() +
@@ -806,29 +986,84 @@ ggplot() +
         legend.box.margin=margin(0,0,0,0))
 ggsave(paste0(PATH, "/99_figures/threshold_comparison_box_", save.file.name, ".png"), width = 14, height = 7)  
 
-#dot plot
-thresh %>%
-  # select(-weighted_R2, -thresh) %>%
-  # pivot_wider(names_from = "run_type", values_from = "sc.thresh") %>%
-  # mutate(env_fac = reorder_within(env_var, trait, flow)) %>%
-  # pivot_longer(cols = c(taxonomic, trait), names_to = "run_type", values_to = "sc.thresh") %>%
-  ggplot() +
-  geom_point(aes(x = sc.thresh, y = env_var, fill = run_type), shape = 21) +
-  facet_wrap(~ flow) +
-  scale_fill_manual(values = type.pal, name = "") +
-  scale_y_reordered() +
-  labs(y = "", x = "normalized variable threshold value") +
-  theme(panel.grid.major = element_line(color="lightgrey"),
-        panel.grid.major.x = element_blank(),
-        panel.border = element_rect(color = "black", fill = NA),
-        panel.background = element_rect(fill = "white"),
-        strip.background = element_rect(fill = "white", color = "black"),
-        strip.text = element_text(size = 12, face = "bold"),
-        plot.background = element_rect(fill = 'white'),
-        axis.text = element_text(size=12),
-        legend.position = "bottom",
-        legend.key = element_rect(fill = "white"),
-        legend.title = element_text(size=12),
-        legend.text = element_text(size=12),
-        legend.box.margin=margin(0,0,0,0))
+# #dot plot
+# thresh %>%
+#   # select(-weighted_R2, -thresh) %>%
+#   # pivot_wider(names_from = "run_type", values_from = "sc.thresh") %>%
+#   # mutate(env_fac = reorder_within(env_var, trait, flow)) %>%
+#   # pivot_longer(cols = c(taxonomic, trait), names_to = "run_type", values_to = "sc.thresh") %>%
+#   ggplot() +
+#   geom_point(aes(x = sc.thresh, y = env_var, fill = run_type), shape = 21) +
+#   facet_wrap(~ flow) +
+#   scale_fill_manual(values = type.pal, name = "") +
+#   scale_y_reordered() +
+#   labs(y = "", x = "normalized variable threshold value") +
+#   theme(panel.grid.major = element_line(color="lightgrey"),
+#         panel.grid.major.x = element_blank(),
+#         panel.border = element_rect(color = "black", fill = NA),
+#         panel.background = element_rect(fill = "white"),
+#         strip.background = element_rect(fill = "white", color = "black"),
+#         strip.text = element_text(size = 12, face = "bold"),
+#         plot.background = element_rect(fill = 'white'),
+#         axis.text = element_text(size=12),
+#         legend.position = "bottom",
+#         legend.key = element_rect(fill = "white"),
+#         legend.title = element_text(size=12),
+#         legend.text = element_text(size=12),
+#         legend.box.margin=margin(0,0,0,0))
+
+# get direction of change for spp x traits ----
+if(FALSE) {
+  gf.mod <- gf.list[[1]]
+  v = "mn_water_temp_spring"
+  spp = "Luxilus_pilsbryi"
+}
+
+var <- gf.mod$X[, names(gf.mod$X) == v]
+spp.val <- gf.mod$Y[, names(gf.mod$Y) == spp]
+
+df <- data.frame(var_value = var, spp_val = as.numeric(spp.val))
+
+df <- add_info_cols(df, gf.mod)
+
+t <- thresh %>% filter(env_var == v & flow == unique(df$flow) & run_type == unique(df$run_type))
+df <- df %>%
+  mutate(thresh_group = ifelse(var_value > t$thresh, "above", "below")) %>%
+  group_by(thresh_group) %>%
+  mutate(ttl_sites_in_grp = n())
+
+df %>%
+  summarise(mn_abund = mean(as.numeric(spp_val)-1)) ##need to subtract 1 from presence/absence since its a factor and will recode to 1, 2
+
+#maybe we only care about presence distribution? since not true absences?
+df.above <- df %>% filter(thresh_group == "above")
+df.below <- df %>% filter(thresh_group == "below")
+
+wilcox.test(df$spp_val~df$thresh_group) 
+##if significant, then the above and below thresh are signfiicantly different
+##pair the significance with directionality (where are most positives or more abundances, above or below)
+
+#for present absent, compare prop present over and under threshold
+#prop present above, prop present below?
+#or just say mostly present above or below, sum number of species that are above or below?
+
+
+
+#for trait modality see chen paper
+
+
+ggplot() +
+  geom_point(data = df, aes(x = var_value, y = spp_val)) +
+  geom_vline(aes(xintercept = t$thresh)) +
+  labs(x = v, y = spp) +
+  theme_minimal()
+
+#only works with trait:
+ggplot() +
+  geom_boxplot(data = df, aes(x = thresh_group, y = spp_val, fill = thresh_group), alpha = 0.5) +
+  # geom_hline(aes(yintercept = t$thresh)) +
+  theme_minimal()
+#could then get prop of species in the regime that are present/absent above/below the threshold
+#same for modality
+
 

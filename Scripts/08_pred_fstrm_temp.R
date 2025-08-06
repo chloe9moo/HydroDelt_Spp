@@ -353,3 +353,10 @@ summ.temp <- summ.temp %>%
   left_join(., slope.l)
 
 write_csv(summ.temp, paste0(PATH, "/02_EnvDat/predicted_stream_temps_summ_all.csv"))
+
+#summarize time extent
+# pred_temp %>%
+#   + group_by(site_no) %>%
+#   + summarise(min_date = min(date), max_date = max(date)) %>%
+#   + mutate(n_days = max_date - min_date) %>%
+#   + mutate(n_yrs = n_days / 365)

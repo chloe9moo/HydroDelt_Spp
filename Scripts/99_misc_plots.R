@@ -6,6 +6,26 @@ PATH <- getwd()
 
 source(paste0(PATH, "/Scripts/XX_colors.R"))
 
+# summary of occ dat ----
+occ.files <- list.files(paste0(PATH, "/01_BioDat/"), pattern = "_filtered_wide", full.names = T)
+occ.files <- occ.files[grepl("20240813", occ.files)]
+
+occ.dat <- lapply(occ.files, function(x) {
+  read_csv(x) %>%
+    pivot_longer(cols = -c(COMID, site_id, long, lat, flw_type, flw_gage_no), names_to = "taxa_name", values_to = "p_a")
+})
+
+occ.dat[[1]]$taxa <- "bug"
+occ.dat[[2]]$taxa <- "fish"
+
+occ.dat <- do.call(rbind, occ.dat)
+
+occ.dat %>%
+  filter(p_a != 0) %>%
+  group_by(taxa, flw_type) %>%
+  summarise(n_sites = n_distinct(site_id),
+            n_spp = n_distinct(taxa_name))
+
 # study area ----
 #eco region of interest
 eco <- read_sf(paste0(PATH, "/02_EnvDat/study_extent_shp/ecoreg_l3_interior_highlands_crop.shp")) #%>%
@@ -40,6 +60,7 @@ g.info$flw_type <- flw_near$Flow_type #add flow types
 rm(flw, flw_near, nr.line)
 
 #bio dat
+##FYI THIS NO LONGER WORKS (ON 20250701)
 occ.dat <- lapply(list.files(paste0(PATH, "/01_BioDat"), pattern = "^occ_(bug|fish)", full.names = T), function(x) {
   df <- read_csv(x) %>%
     select(lat, long, phylum) %>%
@@ -130,7 +151,7 @@ library(tidyverse); library(sf)
 PATH <- getwd()
 source(paste0(PATH, "/Scripts/XX_colors.R"))
 
-file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_20240718", full.names = TRUE)
+file.list <- list.files(paste0(PATH, "/01_BioDat"), pattern = "_wide_20240813", full.names = TRUE)
 occ.list <- lapply(file.list, read_csv, col_types = cols(lat = col_number(),
                                                          long = col_number(),
                                                          COMID = col_character(),
@@ -149,27 +170,119 @@ for(i in seq_along(occ.list)) {
 
 xy_flw <- bind_rows(xy_flw)
 
-div <- left_join(div_list, xy_flw)
+div <- left_join(div_list, xy_flw) %>%
+  filter(!is.na(flw_type))
+
+## div summary ----
+div %>%
+  group_by(taxa, flw_type) %>%
+  summarise(mn_rich = mean(n_sp),
+            sd_rich = sd(n_sp),
+            mn_fdisp = mean(f_disp),
+            sd_fdisp = sd(f_disp))
 
 ##boxplot of flow type x diversity estimate ----
-tmp <- div %>% 
+###anova ----
+div.t <- split(div, div$taxa)
+
+a.res <- lapply(div.t, function(df) {
+  
+  anova.r <- aov(n_sp ~ flw_type, data = df)
+  r.r <- as.data.frame(summary(anova.r)[[1]]) %>%
+    rownames_to_column("coeff") %>%
+    mutate(div = "richness")
+  r.t <- data.frame(TukeyHSD(anova.r)[[1]]) %>%
+    rownames_to_column("comparison")  %>%
+    mutate(div = "richness")
+  
+  anova.f <- aov(f_disp ~ flw_type, data = df)
+  f.r <- as.data.frame(summary(anova.f)[[1]]) %>%
+    rownames_to_column("coeff") %>%
+    mutate(div = "functional dispersion")
+  f.t <- data.frame(TukeyHSD(anova.f)[[1]]) %>%
+    rownames_to_column("comparison") %>%
+    mutate(div = "functional dispersion")
+  
+  res <- rbind(r.r, f.r)
+  res.t <- rbind(r.t, f.t)
+  
+  all.res <- list(res, res.t)
+  all.res <- lapply(all.res, function(res.df) {
+    res.df <- res.df %>%
+      mutate(across(where(is.numeric), ~ round(.x, digits = 5)),
+             taxa = unique(df$taxa))
+    return(res.df)
+  })
+  
+  return(all.res)
+})
+
+anova.results.all <- rbind(a.res[[1]][[1]], a.res[[2]][[1]])
+write_csv(anova.results.all, paste0(PATH, "/98_result_tables/anova_flow_regime_div_comp.csv"))
+tukey.results.all <- rbind(a.res[[1]][[2]], a.res[[2]][[2]])
+write_csv(tukey.results.all, paste0(PATH, "/98_result_tables/tukey_flow_regime_div_comp.csv"))
+
+###plot ----
+tmp <- div %>%
   pivot_longer(cols = matches("^(n_|f_)"), names_to = "div_type", values_to = "value") %>%
+  filter(div_type %in% c("n_sp", "f_disp")) %>%
   mutate(div_type = case_when(div_type == "n_sp" ~ "richness",
-                              div_type == "n_fsp" ~ "n. functionally unique spp",
-                              div_type == "f_eve" ~ "functional evenness",
+                              #div_type == "n_fsp" ~ "n. functionally unique spp",
+                              #div_type == "f_eve" ~ "functional evenness",
                               div_type == "f_disp" ~ "functional dispersion",
                               T ~ NA)) %>%
-  filter(!is.na(div_type))
+  filter(!is.na(div_type)) %>%
+  mutate(taxa = if_else(taxa == "bug", "aquatic insect", "fish"))
+tmp.mn <- tmp %>%
+  group_by(flw_type, div_type, taxa) %>%
+  summarise(grp_mn = mean(value))
+
+##get grps for labels
+# tmp %>% group_by(taxa, div_type) %>% summarize(max_val = max(value))
+tmp.grp <- tukey.results.all %>% select(div, taxa)
+tmp.grp$flw_type <- rep(c("Int", "GW", "RO"), 4)
+tmp.grp$grp <- c("b", "a", "ab", 
+                 "a", "a", "a", 
+                 "b", "a", "a",
+                 "ab", "a", "b")
+label_pos <- 1.05
+tmp.grp <- tmp.grp %>% 
+  mutate(y = case_when(taxa == "bug" & div == "richness" ~ 150 * label_pos,
+                       taxa == "bug" & div == "functional dispersion" ~ 0.239 * label_pos,
+                       taxa == "fish" & div == "richness" ~ 100 * label_pos,
+                       taxa == "fish" & div == "functional dispersion" ~ 0.235 * label_pos),
+         taxa = if_else(taxa == "bug", "aquatic insect", "fish")) %>%
+  rename(div_type = div)
 
 ggplot() +
-  geom_boxplot(data = tmp %>% filter(taxa == "fish"), aes(x = flw_type, y = value, fill = flw_type), na.rm = T) +
+  geom_violin(data = tmp, aes(x = flw_type, y = value, fill = flw_type), na.rm = T) +
+  geom_point(data = tmp.mn, aes(x = flw_type, y = grp_mn), shape = 4, size = 3, stroke = 2) +
+  geom_text(data = tmp.grp, aes(x = flw_type, y = y, label = grp), family = "bold", size = 6) +
   # geom_jitter(data = tmp, aes(x = flw_type, y = value), alpha = 0.2, width = 0.3) +
-  # facet_grid(div_type ~ taxa, scales = "free") +
-  facet_wrap(~ div_type, scales = "free_y") +
+  facet_wrap(taxa ~ div_type, scales = "free_y") +
   scale_fill_manual(values = flow.pal) +
   theme_bw() +
-  theme(axis.title = element_blank())
-ggsave(paste0(PATH, "/99_figures/site_div_fish_boxplot_comp.png"), width = 7, height = 5)
+  theme(axis.title = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_text(color = "black", size = 12),
+        strip.text.x = element_text(size = 12, colour = "black", family = "bold"))
+ggsave(paste0(PATH, "/99_figures/site_div_bothtaxa_boxplot_comp.png"), width = 7, height = 7)
+
+# bug.bp <- ggplot() +
+#   geom_boxplot(data = tmp %>% filter(taxa == "bug"), aes(x = flw_type, y = value, fill = flw_type), na.rm = T) +
+#   geom_point(data = tmp.mn %>% filter(taxa == "bug"), aes(x = flw_type, y = grp_mn), shape = 4, size = 3) +
+#   # geom_jitter(data = tmp, aes(x = flw_type, y = value), alpha = 0.2, width = 0.3) +
+#   # facet_grid(div_type ~ taxa, scales = "free") +
+#   facet_wrap(~ div_type, scales = "free_y") +
+#   scale_fill_manual(values = flow.pal) +
+#   theme_bw() +
+#   theme(axis.title = element_blank(),
+#         legend.position = "none",
+#         axis.text.x = element_text(color = "black", size = 12),
+#         strip.text.x = element_text(size = 12, colour = "black"))
+# ggsave(paste0(PATH, "/99_figures/site_div_bug_boxplot_comp.png"), plot = bug.bp, width = 7, height = 5)
+
+ggpubr::ggarrange(fish.bp, bug.bp, nrow = 2, labels = c("fish", "aquatic insect"))
 
 ##density plot flow type x diversity ----
 ggplot() +
@@ -276,7 +389,7 @@ p1 <- ggplot() +
   scale_fill_manual(values = bi.var.pal) +
   guides(fill = "none", shape = guide_legend(override.aes = list(fill = "black"))) +
   coord_sf(xlim = c(-98, -89)) +
-  ggtitle("Fish") +
+  ggtitle("fish") +
   theme(axis.line = element_line(color = "black"),
         panel.grid = element_blank(),
         plot.background = element_blank(),
