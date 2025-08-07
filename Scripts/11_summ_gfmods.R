@@ -1013,57 +1013,164 @@ ggsave(paste0(PATH, "/99_figures/threshold_comparison_box_", save.file.name, ".p
 #         legend.box.margin=margin(0,0,0,0))
 
 # get direction of change for spp x traits ----
-if(FALSE) {
-  gf.mod <- gf.list[[1]]
-  v = "mn_water_temp_spring"
-  spp = "Luxilus_pilsbryi"
+find_thresh_direction <- function(gf.mod, spp, v, 
+                                  return.plot = FALSE, 
+                                  plot.type = c("point", "box", "density", "bar proportion", "bar freq")) {
+  if(FALSE) {
+    ##testing
+    gf.mod <- gf.list[[5]]
+    v = "mn_water_temp_spring"
+    # spp = "Luxilus_pilsbryi"
+    spp = "troph_invert"
+  }
+  
+  var <- gf.mod$X[, names(gf.mod$X) == v]
+  spp.val <- gf.mod$Y[, names(gf.mod$Y) == spp]
+  
+  df <- data.frame(var_value = var, spp_val = spp.val)
+  
+  df <- add_info_cols(df, gf.mod)
+  
+  t <- thresh %>% filter(env_var == v & flow == unique(df$flow) & run_type == unique(df$run_type))
+  df <- df %>% mutate(thresh_group = ifelse(var_value > t$thresh, "above", "below"))
+  
+  ##comparison test
+  if(all(spp.val %in% c(1, 0))) {
+    
+    tbl <- table(df$thresh_group, spp.val)
+    ct <- chisq.test(tbl)
+    
+    res <- data.frame(test_type = "chi sq.", 
+                      test_stat = ct$statistic, 
+                      p_val = ct$p.value, 
+                      direction = names(which.max(tbl[, "1"])))
+    
+  } else {
+    
+    wt <- wilcox.test(spp.val ~ df$thresh_group)
+    
+    summ.df <- df %>%
+      group_by(thresh_group) %>%
+      summarise(mn_mod = mean(spp_val))
+    
+    res <- data.frame(test_type = "wilcoxon", 
+                      test_stat = wt$statistic, 
+                      p_val = wt$p.value, 
+                      direction = summ.df$thresh_group[which.max(summ.df$mn_mod)])
+    
+  }
+  
+  res$spp <- spp
+  res$var <- v
+  
+  if(return.plot) {
+    if(!all(spp.val %in% c(1, 0))) {
+      df <- df %>% mutate(transf_spp_val = spp_val * 100)
+    }
+    
+    p <- ggplot(data = df)
+    
+    if(all(spp.val %in% c(1, 0))) {
+      if(plot.type == "bar proportion") {
+        p <- p + geom_bar(aes(x = spp_val, fill = thresh_group), color = "black", position = "fill") +
+          labs(x = spp, y = "proportion of sites")
+      }
+      if(plot.type == "bar freq") {
+        p <- p + geom_bar(aes(x = spp_val, fill = thresh_group), color = "black", position = "dodge") +
+          labs(x = spp, y = "freq. of sites")
+      }
+      if(plot.type == "box") {
+        p <- p + 
+          geom_boxplot(aes(x = spp_val, y = var_value), outliers = FALSE) +
+          geom_point(aes(x = spp_val, y = var_value), alpha = 0.6, position = position_jitter(width = 0.1)) +
+          geom_hline(aes(yintercept = t$thresh), color = "red", linetype = "dashed") +
+          labs(x = spp, y = v)
+      }
+    } else {
+      if(plot.type == "point") {
+        p <- p +
+          geom_point(aes(x = var_value, y = spp_val)) +
+          geom_vline(aes(xintercept = t$thresh), color = "red", linetype = "dashed")  +
+          labs(x = v, y = spp)
+      }
+      if(plot.type == "box") {
+        p <- p +
+          geom_boxplot(aes(x = thresh_group, y = transf_spp_val)) +
+          scale_y_continuous(transform = "log1p") +
+          labs(x = "threshold distribution", y = paste0("proportion of taxa with ", spp))
+      }
+      if(plot.type == "density") {
+        p <- p +
+          geom_density(aes(x = transf_spp_val, fill = thresh_group), alpha = 0.5) +
+          scale_x_continuous(transform = "log1p") +
+          labs(x = paste0("proportion of taxa with ", spp))
+      }
+    }
+    
+    p <- p + theme_bw() +
+      ggtitle(paste0("statistic = ", round(res$test_stat, 3), 
+                     "; p-value = ", round(res$p_val, 3), 
+                     "; direction of change is ", res$direction))
+    
+    return(p)
+    
+  } else {
+    #if not plotting, return results of stats tests
+    res <- add_info_cols(res, gf.mod)
+    return(res)
+  }
 }
 
-var <- gf.mod$X[, names(gf.mod$X) == v]
-spp.val <- gf.mod$Y[, names(gf.mod$Y) == spp]
+# find_thresh_direction(gf.list[[5]], spp = "troph_invert", v = "mn_water_temp_spring",
+#                       return.plot = T, plot.type = "density")
 
-df <- data.frame(var_value = var, spp_val = as.numeric(spp.val))
+t.dir <- lapply(gf.list, function(gf.mod) {
+  
+  spp.l <- names(gf.mod$Y)
+  v.l <- names(gf.mod$X)
+  
+  res.all <- data.frame()
+  for(i in seq_along(spp.l)) {
+    
+    for(y in seq_along(v.l)) {
+      
+      r.out <- find_thresh_direction(gf.mod, spp = spp.l[[i]], v = v.l[[y]])
+      
+      res.all <- do.call(rbind, list(res.all, r.out))
+      
+    }
+  }
+  
+  return(res.all)
+  
+})
 
-df <- add_info_cols(df, gf.mod)
+t.dir <- do.call(rbind, t.dir)
 
-t <- thresh %>% filter(env_var == v & flow == unique(df$flow) & run_type == unique(df$run_type))
-df <- df %>%
-  mutate(thresh_group = ifelse(var_value > t$thresh, "above", "below")) %>%
-  group_by(thresh_group) %>%
-  mutate(ttl_sites_in_grp = n())
+t.dir <- t.dir %>%
+  mutate(across(where(is.numeric), ~round(.x, digits = 3)))
 
-df %>%
-  summarise(mn_abund = mean(as.numeric(spp_val)-1)) ##need to subtract 1 from presence/absence since its a factor and will recode to 1, 2
+write_csv(t.dir, paste0(PATH, "/98_result_tables/threshold_change_direction_", taxa, ".csv"))
+##need to account for variable and spp r2 after running this!!! summarize too!!
 
-#maybe we only care about presence distribution? since not true absences?
-df.above <- df %>% filter(thresh_group == "above")
-df.below <- df %>% filter(thresh_group == "below")
+e.tmp <- vi.table %>% select(env_var, weighted_r2, flow, taxa, run_type, env_type) %>% rename(var = env_var)
+t.dir.info <- t.dir %>%
+  left_join(e.tmp) %>%
+  left_join(rename(sp.perf, spp = name))
 
-wilcox.test(df$spp_val~df$thresh_group) 
-##if significant, then the above and below thresh are signfiicantly different
-##pair the significance with directionality (where are most positives or more abundances, above or below)
+t.dir.summ <- t.dir.info %>%
+  filter(var %in% max.r2$env_var)
 
-#for present absent, compare prop present over and under threshold
-#prop present above, prop present below?
-#or just say mostly present above or below, sum number of species that are above or below?
+t.dir.summ %>% 
+  group_by(flow, run_type, var) %>%
+  mutate(ttl_spp_incl = sum(!is.na(perf)),
+         ttl_sig_diff = sum(p_val <= 0.05)) %>%
+  group_by(flow, run_type, var, ttl_spp_incl, ttl_sig_diff, direction) %>%
+  summarise(direction_ttl = sum(p_val <= 0.05)) %>% View()
 
-
-
-#for trait modality see chen paper
-
-
-ggplot() +
-  geom_point(data = df, aes(x = var_value, y = spp_val)) +
-  geom_vline(aes(xintercept = t$thresh)) +
-  labs(x = v, y = spp) +
-  theme_minimal()
-
-#only works with trait:
-ggplot() +
-  geom_boxplot(data = df, aes(x = thresh_group, y = spp_val, fill = thresh_group), alpha = 0.5) +
-  # geom_hline(aes(yintercept = t$thresh)) +
-  theme_minimal()
-#could then get prop of species in the regime that are present/absent above/below the threshold
-#same for modality
-
-
+t.dir.summ %>%
+  filter(flow == "GW" 
+         & var == "th1" 
+         & run_type == "taxonomic" 
+         # & p_val <= 0.05
+         ) %>% View()
